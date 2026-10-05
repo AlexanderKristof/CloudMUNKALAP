@@ -1,0 +1,11 @@
+services:
+  munkalap:
+    build: ./server
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Közös kulcs, amit az appba is be kell írni – enélkül bárki belépne, aki eléri a szervert.
+      APP_KEY: ${APP_KEY:?Állítsd be az APP_KEY-t a .env fájlban}
+    volumes:
+      - ./data:/data
