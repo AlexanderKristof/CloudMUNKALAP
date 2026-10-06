@@ -5,7 +5,13 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # Közös kulcs, amit az appba is be kell írni – enélkül bárki belépne, aki eléri a szervert.
+      # Közös kulcs, amit az appba is be kell írni (kAppKulcs) – enélkül bárki belépne, aki eléri a szervert.
       APP_KEY: ${APP_KEY:?Állítsd be az APP_KEY-t a .env fájlban}
+      # E-mail küldés (Gmail: a gmail cím + alkalmazásjelszó)
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      MAIL_FROM_NAME: ${MAIL_FROM_NAME:-DR Industrie Szerviz}
     volumes:
       - ./data:/data

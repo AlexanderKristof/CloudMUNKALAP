@@ -5,10 +5,11 @@ const fs = require('fs');
 const Database = require('better-sqlite3');
 
 const SCHEMA = `
+-- A felhasználót az e-mail címe azonosítja (jelszó nincs).
 CREATE TABLE IF NOT EXISTS users (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  name        TEXT NOT NULL,
-  name_key    TEXT NOT NULL UNIQUE,
+  email       TEXT NOT NULL UNIQUE,
+  name        TEXT,
   created_at  INTEGER NOT NULL,
   last_seen   INTEGER NOT NULL
 );
@@ -29,27 +30,36 @@ CREATE TABLE IF NOT EXISTS sessions (
   last_seen   INTEGER NOT NULL
 );
 
--- Egy sor = egy munkalap. A teljes munkalap a "data" oszlopban van JSON-ként,
--- a kereséshez használt mezőket külön oszlopba is kiírjuk.
+-- Egy sor = egy munkalap. A teljes kitöltött űrlap a "data" oszlopban van JSON-ként,
+-- a kereséshez használt mezőket külön oszlopba is kiírjuk. A PDF és az aláírások
+-- fájlként vannak a lemezen (FILES_DIR/<munkalap id>/), itt csak az van, hogy megvannak-e.
 CREATE TABLE IF NOT EXISTS worksheets (
-  id            TEXT PRIMARY KEY,
-  seq           INTEGER NOT NULL UNIQUE,
-  version       INTEGER NOT NULL DEFAULT 1,
-  created_by    INTEGER NOT NULL REFERENCES users(id),
-  updated_by    INTEGER NOT NULL REFERENCES users(id),
-  device_id     TEXT REFERENCES devices(id),
-  munkalapszam  TEXT,
-  ugyfel        TEXT,
-  datum         TEXT,
-  allapot       TEXT,
-  data          TEXT NOT NULL,
-  deleted       INTEGER NOT NULL DEFAULT 0,
-  created_at    INTEGER NOT NULL,
-  updated_at    INTEGER NOT NULL
+  id                  TEXT PRIMARY KEY,
+  seq                 INTEGER NOT NULL UNIQUE,
+  version             INTEGER NOT NULL DEFAULT 1,
+  created_by          INTEGER NOT NULL REFERENCES users(id),
+  updated_by          INTEGER NOT NULL REFERENCES users(id),
+  device_id           TEXT REFERENCES devices(id),
+  munkalapszam        TEXT,
+  ugyfel              TEXT,
+  ugyfel_email        TEXT,
+  helyszin            TEXT,
+  gep                 TEXT,
+  datum_szoveg        TEXT,
+  data                TEXT NOT NULL,
+  has_pdf             INTEGER NOT NULL DEFAULT 0,
+  has_alairas_ugyfel  INTEGER NOT NULL DEFAULT 0,
+  has_alairas_szerviz INTEGER NOT NULL DEFAULT 0,
+  email_status        TEXT NOT NULL DEFAULT 'nincs',
+  email_sent_at       INTEGER,
+  email_error         TEXT,
+  deleted             INTEGER NOT NULL DEFAULT 0,
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ws_created_by ON worksheets(created_by);
-CREATE INDEX IF NOT EXISTS idx_ws_datum ON worksheets(datum);
-CREATE INDEX IF NOT EXISTS idx_ws_ugyfel ON worksheets(ugyfel);
+CREATE INDEX IF NOT EXISTS idx_ws_created_at ON worksheets(created_at);
+CREATE INDEX IF NOT EXISTS idx_ws_munkalapszam ON worksheets(munkalapszam);
 
 -- Minden felülírt / törölt változat ide kerül, így semmi nem vész el,
 -- ha két eszköz egyszerre módosítja ugyanazt a munkalapot.

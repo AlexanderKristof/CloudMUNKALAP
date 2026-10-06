@@ -3,50 +3,62 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Munkalapok</title>
+<title>DR Munkalapok</title>
 <style>
-  :root { --bg:#f5f6f8; --card:#fff; --text:#1d2330; --muted:#677085; --line:#dde1e8; --accent:#1f6feb; --danger:#c62828; }
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1d2330; --muted:#677085; --line:#dde1e8; --accent:#d84315; --ok:#2e7d32; --danger:#c62828; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#14171c; --card:#1d2128; --text:#e6e9ef; --muted:#9aa3b5; --line:#2e343e; --accent:#58a6ff; --danger:#ef5350; }
+    :root { --bg:#14171c; --card:#1d2128; --text:#e6e9ef; --muted:#9aa3b5; --line:#2e343e; --accent:#ff7043; --ok:#66bb6a; --danger:#ef5350; }
   }
   * { box-sizing: border-box; }
   body { margin:0; font:15px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--text); }
-  header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 16px; background:var(--card); border-bottom:1px solid var(--line); }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 16px; background:var(--accent); color:#fff; }
   header h1 { font-size:18px; margin:0; }
+  header .link { color:#fff; text-decoration:underline; }
   main { max-width:1100px; margin:0 auto; padding:16px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
-  input, select, button { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); }
-  button { background:var(--accent); color:#fff; border-color:var(--accent); cursor:pointer; }
+  input, button { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); }
+  select { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); }
+  button, a.btn { background:var(--accent); color:#fff; border:1px solid var(--accent); cursor:pointer; border-radius:8px; padding:8px 12px; text-decoration:none; display:inline-block; }
+  button.secondary { background:none; color:var(--accent); }
   button.link { background:none; border:none; color:var(--accent); padding:0; }
   .filters { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:8px; }
   table { width:100%; border-collapse:collapse; }
   th, td { text-align:left; padding:8px; border-bottom:1px solid var(--line); vertical-align:top; }
-  td:first-child { white-space:nowrap; }
+  td.nowrap { white-space:nowrap; }
   th { color:var(--muted); font-weight:600; font-size:13px; }
   tr.row { cursor:pointer; }
   tr.row:hover { background:color-mix(in srgb, var(--accent) 8%, transparent); }
   .muted { color:var(--muted); font-size:13px; }
   .err { color:var(--danger); }
+  .ok { color:var(--ok); }
   .table-wrap { overflow-x:auto; }
+  dl.fields { display:grid; grid-template-columns:max-content 1fr; gap:6px 16px; margin:0 0 16px; }
+  dl.fields dt { color:var(--muted); }
+  dl.fields dd { margin:0; white-space:pre-wrap; word-break:break-word; }
+  .sigs { display:flex; flex-wrap:wrap; gap:16px; margin-bottom:16px; }
+  .sigs figure { margin:0; }
+  .sigs img { background:#fff; border:1px solid var(--line); border-radius:6px; max-width:260px; height:80px; object-fit:contain; display:block; }
+  .actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:16px; }
   pre { white-space:pre-wrap; word-break:break-word; background:var(--bg); padding:12px; border-radius:8px; }
   #login { max-width:380px; margin:48px auto; }
   #login label { display:block; margin:12px 0 4px; }
   #login input { width:100%; }
   #login button { margin-top:16px; width:100%; }
   .hidden { display:none !important; }
+  @media (max-width: 640px) { dl.fields { grid-template-columns:1fr; } dl.fields dt { margin-top:6px; } }
 </style>
 </head>
 <body>
 <header>
-  <h1>Munkalapok</h1>
-  <div id="who" class="hidden"><span id="whoName"></span> · <button class="link" id="logout">Kilépés</button></div>
+  <h1>DR Industrie – Munkalapok</h1>
+  <div id="who" class="hidden"><span id="whoName"></span> · <button class="link" id="logout" style="color:#fff">Kilépés</button></div>
 </header>
 
 <main>
   <form id="login" class="card hidden">
     <h2 style="margin-top:0">Bejelentkezés</h2>
-    <label for="name">Neved</label>
-    <input id="name" autocomplete="name" required maxlength="60">
+    <label for="email">E-mail cím</label>
+    <input id="email" type="email" autocomplete="email" required>
     <div id="keyWrap" class="hidden">
       <label for="appKey">Alkalmazáskulcs</label>
       <input id="appKey" type="password">
@@ -57,32 +69,38 @@
 
   <section id="appView" class="hidden">
     <form id="search" class="card filters">
-      <input id="q" placeholder="Keresés (szám, ügyfél, szöveg)">
+      <input id="q" placeholder="Keresés (szám, ügyfél, gép, szöveg)">
       <select id="user"><option value="">Mindenki</option></select>
-      <input id="from" type="date" title="Dátumtól">
-      <input id="to" type="date" title="Dátumig">
-      <input id="allapot" placeholder="Állapot">
+      <input id="from" type="date" title="Rögzítve ettől">
+      <input id="to" type="date" title="Rögzítve eddig">
       <button type="submit">Keresés</button>
     </form>
 
-    <div class="card">
+    <div id="detail" class="card hidden">
+      <button class="link" id="closeDetail">&larr; Vissza a listához</button>
+      <h2 id="detailTitle"></h2>
+      <p id="detailMeta" class="muted"></p>
+      <div class="actions">
+        <a id="pdfLink" class="btn" target="_blank" rel="noopener">PDF megnyitása</a>
+        <input id="resendTo" type="email" placeholder="Címzett (alapból az ügyfél)">
+        <button id="resend" class="secondary">E-mail küldése</button>
+        <span id="emailInfo" class="muted"></span>
+      </div>
+      <dl id="detailFields" class="fields"></dl>
+      <div id="detailSigs" class="sigs"></div>
+      <h3>Korábbi változatok</h3>
+      <div id="detailHistory" class="muted"></div>
+    </div>
+
+    <div id="listCard" class="card">
       <p id="count" class="muted"></p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Dátum</th><th>Szám</th><th>Ügyfél</th><th>Állapot</th><th>Rögzítette</th><th>Utoljára módosítva</th></tr></thead>
+          <thead><tr><th>Rögzítve</th><th>DRI szám</th><th>Ügyfél</th><th>Helyszín</th><th>Gép</th><th>Rögzítette</th><th>E-mail</th></tr></thead>
           <tbody id="rows"></tbody>
         </table>
       </div>
       <p><button id="more" class="hidden">Továbbiak</button></p>
-    </div>
-
-    <div id="detail" class="card hidden">
-      <button class="link" id="closeDetail">&larr; Vissza</button>
-      <h2 id="detailTitle"></h2>
-      <p id="detailMeta" class="muted"></p>
-      <pre id="detailData"></pre>
-      <h3>Korábbi változatok</h3>
-      <div id="detailHistory" class="muted"></div>
     </div>
   </section>
 </main>
@@ -95,6 +113,21 @@ const store = {
 };
 let token = store.get('munkalap_token');
 let offset = 0;
+let current = null;
+
+const FIELDS = [
+  ['driSzam', 'Munkalap száma', (v) => v ? 'DRI-' + v : ''],
+  ['ugyfel', 'Ügyfél'],
+  ['ugyfelEmail', 'Ügyfél e-mail'],
+  ['helyszin', 'Munkavégzés helye'],
+  ['gep', 'Gép típusa'],
+  ['idotartam', 'Időtartam'],
+  ['km', 'Megtett km'],
+  ['elvegzettMunka', 'Elvégzett munka'],
+  ['hibaLeiras', 'Hiba leírása + javaslat'],
+  ['datum', 'Hely, dátum'],
+];
+const EMAIL_STATUS = { kuldve: ['Elküldve', 'ok'], hiba: ['Hiba', 'err'], nincs: ['Nem ment ki', 'muted'] };
 
 async function api(path, opts = {}) {
   const res = await fetch('/api' + path, {
@@ -103,12 +136,15 @@ async function api(path, opts = {}) {
   });
   const body = await res.json().catch(() => ({}));
   if (res.status === 401 && path !== '/login') { showLogin(); throw new Error(body.error); }
-  if (!res.ok) throw new Error(body.error || 'Hiba');
+  if (!res.ok && res.status !== 422) throw new Error(body.error || 'Hiba');
   return body;
 }
 
-const fmtDate = (iso) => iso ? new Date(iso).toLocaleString('hu-HU') : '';
+const fmtDate = (iso) => iso ? new Date(iso).toLocaleString('hu-HU', { dateStyle: 'short', timeStyle: 'short' }) : '';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+const fileUrl = (w, kind) => `/api/worksheets/${encodeURIComponent(w.id)}/files/${kind}?token=${encodeURIComponent(token)}`;
+const who = (p) => p.name ? `${p.name} (${p.email})` : p.email;
+const emailBadge = (e) => { const [t, c] = EMAIL_STATUS[e.status] || [e.status, 'muted']; return `<span class="${c}">${t}</span>`; };
 
 async function showLogin() {
   token = null; store.set('munkalap_token', null);
@@ -119,36 +155,56 @@ async function showLogin() {
 
 async function showApp() {
   const me = await api('/me');
-  $('whoName').textContent = me.user.name;
+  $('whoName').textContent = me.user.email;
   $('login').classList.add('hidden'); $('who').classList.remove('hidden'); $('appView').classList.remove('hidden');
   const users = await api('/users');
-  $('user').innerHTML = '<option value="">Mindenki</option>' + users.map((u) => `<option value="${u.id}">${esc(u.name)} (${u.worksheetCount})</option>`).join('');
+  $('user').innerHTML = '<option value="">Mindenki</option>' + users.map((u) => `<option value="${u.id}">${esc(u.name || u.email)} (${u.worksheetCount})</option>`).join('');
   search(true);
 }
 
 async function search(reset) {
   if (reset) { offset = 0; $('rows').innerHTML = ''; }
   const p = new URLSearchParams({ limit: 50, offset });
-  for (const k of ['q', 'user', 'from', 'to', 'allapot']) if ($(k).value) p.set(k, $(k).value);
+  for (const k of ['q', 'user', 'from', 'to']) if ($(k).value) p.set(k, $(k).value);
   const r = await api('/worksheets?' + p);
   $('rows').insertAdjacentHTML('beforeend', r.items.map((w) => `
     <tr class="row" data-id="${esc(w.id)}">
-      <td>${esc(w.datum)}</td><td>${esc(w.munkalapszam)}</td><td>${esc(w.ugyfel)}</td><td>${esc(w.allapot)}</td>
-      <td>${esc(w.createdBy.name)}</td><td>${esc(w.updatedBy.name)}<br><span class="muted">${fmtDate(w.updatedAt)}</span></td>
+      <td class="nowrap">${fmtDate(w.createdAt)}</td><td class="nowrap">${w.munkalapszam ? 'DRI-' + esc(w.munkalapszam) : ''}</td>
+      <td>${esc(w.ugyfel)}</td><td>${esc(w.helyszin)}</td><td>${esc(w.gep)}</td>
+      <td>${esc(w.createdBy.name || w.createdBy.email)}</td><td>${emailBadge(w.email)}</td>
     </tr>`).join(''));
   offset += r.items.length;
-  $('count').textContent = `${r.total} találat`;
+  $('count').textContent = `${r.total} munkalap`;
   $('more').classList.toggle('hidden', offset >= r.total);
+}
+
+function renderDetail(w) {
+  current = w;
+  $('detailTitle').textContent = [w.munkalapszam && 'DRI-' + w.munkalapszam, w.ugyfel].filter(Boolean).join(' – ') || w.id;
+  $('detailMeta').textContent = `Rögzítette: ${who(w.createdBy)}, ${fmtDate(w.createdAt)}`
+    + (w.version > 1 ? ` · Módosította: ${who(w.updatedBy)}, ${fmtDate(w.updatedAt)} · ${w.version}. változat` : '')
+    + (w.device ? ` · Eszköz: ${w.device.name || w.device.id}` : '');
+  $('pdfLink').classList.toggle('hidden', !w.files.pdf);
+  $('pdfLink').href = w.files.pdf ? fileUrl(w, 'pdf') : '#';
+  $('resend').disabled = !w.files.pdf;
+  $('emailInfo').innerHTML = emailBadge(w.email)
+    + (w.email.sentAt ? ` (${fmtDate(w.email.sentAt)})` : '') + (w.email.error ? ` – ${esc(w.email.error)}` : '');
+  const d = w.data;
+  const known = new Set(FIELDS.map((f) => f[0]));
+  const extra = Object.keys(d).filter((k) => !known.has(k)).map((k) => [k, k]);
+  $('detailFields').innerHTML = [...FIELDS, ...extra]
+    .map(([k, label, fmt]) => `<dt>${esc(label)}</dt><dd>${esc(fmt ? fmt(d[k]) : (typeof d[k] === 'object' ? JSON.stringify(d[k]) : d[k])) || '–'}</dd>`).join('');
+  $('detailSigs').innerHTML = [['alairasUgyfel', 'Ügyfél aláírása'], ['alairasSzerviz', 'Szerviz aláírása']]
+    .filter(([k]) => w.files[k])
+    .map(([k, label]) => `<figure><img src="${fileUrl(w, k)}" alt="${label}"><figcaption class="muted">${label}</figcaption></figure>`).join('');
 }
 
 async function openDetail(id) {
   const [w, hist] = await Promise.all([api('/worksheets/' + encodeURIComponent(id)), api('/worksheets/' + encodeURIComponent(id) + '/history')]);
-  $('detailTitle').textContent = [w.munkalapszam, w.ugyfel].filter(Boolean).join(' – ') || w.id;
-  $('detailMeta').textContent = `Rögzítette: ${w.createdBy.name} (${fmtDate(w.createdAt)}) · Módosította: ${w.updatedBy.name} (${fmtDate(w.updatedAt)})`
-    + (w.device ? ` · Eszköz: ${w.device.name || w.device.id}` : '') + ` · ${w.version}. változat`;
-  $('detailData').textContent = JSON.stringify(w.data, null, 2);
+  renderDetail(w);
+  $('resendTo').value = '';
   $('detailHistory').innerHTML = hist.length
-    ? hist.map((h) => `<details><summary>${h.version}. változat – ${esc(h.updatedBy.name)}, ${fmtDate(h.updatedAt)}${h.deleted ? ' (törölt)' : ''}</summary><pre>${esc(JSON.stringify(h.data, null, 2))}</pre></details>`).join('')
+    ? hist.map((h) => `<details><summary>${h.version}. változat – ${esc(who(h.updatedBy))}, ${fmtDate(h.updatedAt)}${h.deleted ? ' (törölt)' : ''}</summary><pre>${esc(JSON.stringify(h.data, null, 2))}</pre></details>`).join('')
     : 'Nincs korábbi változat.';
   $('detail').classList.remove('hidden');
   $('detail').scrollIntoView({ behavior: 'smooth' });
@@ -158,7 +214,7 @@ $('login').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('loginErr').textContent = '';
   try {
-    const r = await api('/login', { method: 'POST', body: JSON.stringify({ name: $('name').value, appKey: $('appKey').value, deviceName: 'Böngésző' }) });
+    const r = await api('/login', { method: 'POST', body: JSON.stringify({ email: $('email').value, appKey: $('appKey').value, deviceName: 'Böngésző' }) });
     token = r.token; store.set('munkalap_token', token);
     await showApp();
   } catch (err) { $('loginErr').textContent = err.message; }
@@ -168,6 +224,18 @@ $('search').addEventListener('submit', (e) => { e.preventDefault(); search(true)
 $('more').addEventListener('click', () => search(false));
 $('rows').addEventListener('click', (e) => { const tr = e.target.closest('tr.row'); if (tr) openDetail(tr.dataset.id); });
 $('closeDetail').addEventListener('click', () => $('detail').classList.add('hidden'));
+$('resend').addEventListener('click', async () => {
+  const to = $('resendTo').value.trim() || current.ugyfelEmail;
+  if (!to) { $('emailInfo').innerHTML = '<span class="err">Adj meg címzettet.</span>'; return; }
+  if (!confirm(`Elküldöd a munkalapot ide: ${to}?`)) return;
+  $('resend').disabled = true;
+  try {
+    const r = await api(`/worksheets/${encodeURIComponent(current.id)}/email`, { method: 'POST', body: JSON.stringify({ to }) });
+    renderDetail(r.item);
+    if (r.status === 'kuldve') $('emailInfo').innerHTML = `<span class="ok">Elküldve: ${esc(r.to)}</span>`;
+  } catch (err) { $('emailInfo').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+  $('resend').disabled = false;
+});
 
 token ? showApp().catch(() => {}) : showLogin();
 </script>

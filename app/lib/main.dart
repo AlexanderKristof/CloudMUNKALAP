@@ -7,8 +7,9 @@ import 'package:printing/printing.dart';
 import 'package:signature/signature.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:mailer/mailer.dart';
-import 'package:mailer/smtp_server.dart';
+
+import 'korabbi_munkalapok.dart';
+import 'munkalap_api.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -57,6 +58,17 @@ class _LoginScreenState extends State<LoginScreen> {
     if (email.isNotEmpty && email.contains('@')) {
       SharedPreferences prefs = await SharedPreferences.getInstance();
       await prefs.setString('user_email', email);
+
+      // Bejelentkezés a szerverre. Ha most nincs net, nem gond: a szerver felé
+      // a beküldéskor automatikusan bejelentkezik.
+      try {
+        await MunkalapApi.instance.login(email);
+      } on SzerverHiba catch (e) {
+        await prefs.remove('user_email');
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sikertelen bejelentkezés: $e')));
+        return;
+      } catch (_) {}
 
       if (!mounted) return;
       Navigator.pushReplacement(
@@ -158,56 +170,95 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
   bool _isListening = false;
   TextEditingController? _activeListeningController;
 
+  // A munkalap egyedi azonosítója a szerveren. Ugyanazzal az azonosítóval újra beküldve
+  // a munkalap frissül (nem lesz duplikált), az "Új munkalap" gomb ad újat.
+  String _munkalapId = MunkalapApi.ujAzonosito();
+  bool _kuldesFolyamatban = false;
+
   @override
   void initState() {
     super.initState();
     _speech = stt.SpeechToText();
+    // Ha korábban net nélkül készült munkalap, most megpróbáljuk felküldeni.
+    MunkalapApi.instance.varolistaKuldes();
+  }
+
+  Map<String, dynamic> _adatok() => {
+        'driSzam': _driSzamController.text.trim(),
+        'ugyfel': _ugyfelController.text.trim(),
+        'ugyfelEmail': _ugyfelEmailController.text.trim(),
+        'helyszin': _helyszinController.text.trim(),
+        'gep': _gepController.text.trim(),
+        'idotartam': _idotartamController.text.trim(),
+        'km': _kmController.text.trim(),
+        'elvegzettMunka': _elvegzettMunkaController.text.trim(),
+        'hibaLeiras': _hibaLeirasController.text.trim(),
+        'datum': _datumController.text.trim(),
+      };
+
+  // Űrlap ürítése egy új munkalaphoz.
+  void _ujMunkalap() {
+    for (final c in [
+      _driSzamController,
+      _ugyfelController,
+      _ugyfelEmailController,
+      _helyszinController,
+      _gepController,
+      _idotartamController,
+      _kmController,
+      _elvegzettMunkaController,
+      _hibaLeirasController,
+    ]) {
+      c.clear();
+    }
+    _datumController.text = 'Miskolc, ${DateTime.now().year}.${DateTime.now().month}.${DateTime.now().day}.';
+    _ugyfelSigController.clear();
+    _szervizSigController.clear();
+    setState(() => _munkalapId = MunkalapApi.ujAzonosito());
+  }
+
+  // PDF generálás, beküldés a szerverre (ami elmenti és elküldi e-mailben az ügyfélnek),
+  // majd a nyomtatási / megtekintési ablak.
+  Future<void> _bekuldes() async {
+    if (_kuldesFolyamatban || !_formKey.currentState!.validate()) return;
+    setState(() => _kuldesFolyamatban = true);
+    try {
+      final Uint8List? ugyfelBytes = await _ugyfelSigController.toPngBytes();
+      final Uint8List? szervizBytes = await _szervizSigController.toPngBytes();
+      final pdfBytes = await _generatePdf(ugyfelBytes, szervizBytes);
+
+      final eredmeny = await MunkalapApi.instance.bekuld(
+        id: _munkalapId,
+        adatok: _adatok(),
+        pdf: pdfBytes,
+        alairasUgyfel: ugyfelBytes,
+        alairasSzerviz: szervizBytes,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(eredmeny.uzenet), duration: const Duration(seconds: 5)),
+      );
+
+      await Printing.layoutPdf(onLayout: (format) async => pdfBytes);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hiba: $e')));
+    } finally {
+      if (mounted) setState(() => _kuldesFolyamatban = false);
+    }
   }
 
   // Kijelentkezés
   Future<void> _logout() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.remove('user_email');
+    await MunkalapApi.instance.logout();
 
     if (!mounted) return;
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (context) => const LoginScreen()),
     );
-  }
-
-Future<void> _sendPdfInEmail(Uint8List pdfBytes) async {
-    String clientEmail = _ugyfelEmailController.text.trim();
-    if (clientEmail.isEmpty || !clientEmail.contains('@')) {
-      debugPrint("Nincs megadva érvényes ügyfél e-mail cím, az e-mail küldés elmaradt.");
-      return;
-    }
-
-    final smtpServer = gmail('a.te.ceges.emailed@gmail.com', 'ALKALMAZAS_JELSZO');
-
-    final message = Message()
-      ..from = const Address('a.te.ceges.emailed@gmail.com', 'DR Industrie Szerviz')
-      ..recipients.add(clientEmail)
-      ..ccRecipients.add(widget.userEmail)
-      ..subject = 'DR Industrie Munkalap - DRI-${_driSzamController.text}'
-      ..text = 'Tisztelt Ügyfelünk!\n\nMellékelten küldjük a(z) DRI-${_driSzamController.text} számú elvégzett munkalapot.\n\nÜdvözlettel,\nDR Industrie Kft.'
-      ..attachments.add(
-        StreamAttachment(
-          Stream.value(pdfBytes),
-          'application/pdf',
-          fileName: 'Munkalap_DRI_${_driSzamController.text}.pdf',
-        ),
-      );
-
-    try {
-      await send(message, smtpServer);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Munkalap sikeresen elküldve e-mailben!')),
-      );
-    } catch (e) {
-      debugPrint('E-mail küldési hiba: $e');
-    }
   }
 
   String _capitalizeWords(String text) {
@@ -260,7 +311,7 @@ Future<void> _sendPdfInEmail(Uint8List pdfBytes) async {
     }
   }
 
-  Future<Uint8List> _generatePdf() async {
+  Future<Uint8List> _generatePdf(Uint8List? ugyfelBytes, Uint8List? szervizBytes) async {
     final pdf = pw.Document();
 
     final ttfBase = await PdfGoogleFonts.robotoRegular();
@@ -270,8 +321,6 @@ Future<void> _sendPdfInEmail(Uint8List pdfBytes) async {
     final Uint8List bgBytes = bgData.buffer.asUint8List();
     final pw.ImageProvider bgImage = pw.MemoryImage(bgBytes);
 
-    final Uint8List? ugyfelBytes = await _ugyfelSigController.toPngBytes();
-    final Uint8List? szervizBytes = await _szervizSigController.toPngBytes();
     final pw.ImageProvider? ugyfelImg = ugyfelBytes != null ? pw.MemoryImage(ugyfelBytes) : null;
     final pw.ImageProvider? szervizImg = szervizBytes != null ? pw.MemoryImage(szervizBytes) : null;
 
@@ -418,6 +467,32 @@ Future<void> _sendPdfInEmail(Uint8List pdfBytes) async {
         foregroundColor: Colors.white,
         actions: [
           IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: 'Korábbi munkalapok',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const KorabbiMunkalapokScreen()),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.note_add),
+            tooltip: 'Új munkalap',
+            onPressed: () async {
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('Új munkalap'),
+                  content: const Text('Az űrlap kiürül. A már beküldött munkalap a szerveren megmarad.'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Mégse')),
+                    ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Új munkalap')),
+                  ],
+                ),
+              );
+              if (ok == true) _ujMunkalap();
+            },
+          ),
+          IconButton(
             icon: const Icon(Icons.logout),
             tooltip: 'Kijelentkezés',
             onPressed: _logout,
@@ -495,19 +570,10 @@ Future<void> _sendPdfInEmail(Uint8List pdfBytes) async {
                   height: 50,
                   child: ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(backgroundColor: Colors.deepOrange, foregroundColor: Colors.white),
-                    onPressed: () async {
-                      if (_formKey.currentState!.validate()) {
-                        // 1. PDF Generálása
-                        final pdfBytes = await _generatePdf();
-
-                        // 2. Automatikus E-mail küldés (Ügyfélnek + Saját e-mailre másolatban)
-                        await _sendPdfInEmail(pdfBytes);
-
-                        // 3. Nyomtatási / Megtekintési ablak megnyitása
-                        await Printing.layoutPdf(onLayout: (format) async => pdfBytes);
-                      }
-                    },
-                    icon: const Icon(Icons.picture_as_pdf),
+                    onPressed: _kuldesFolyamatban ? null : _bekuldes,
+                    icon: _kuldesFolyamatban
+                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.picture_as_pdf),
                     label: const Text('PDF GENERÁLÁS ÉS KÜLDÉS', style: TextStyle(fontSize: 16)),
                   ),
                 ),

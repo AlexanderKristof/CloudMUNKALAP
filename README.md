@@ -1,54 +1,68 @@
-# CloudMUNKALAP – szerver a munkalapprogramhoz
+# CloudMUNKALAP – DR Industrie munkalap app + szerver
 
-Ez a VPS-en futó szerver és adatbázis a munkalapprogram mobilalkalmazáshoz. Több ember
-több telefonról tud rá menteni, a szerver pedig egy helyen tárolja és kereshetővé teszi a munkalapokat.
+A munkalapprogram (Flutter app) és a hozzá tartozó, VPS-en futó szerver. Több szerelő több telefonról
+küld be munkalapot, a szerver egy helyen tárolja őket, és kereshetővé teszi.
 
-- **Bejelentkezés csak névvel**, jelszó nélkül. A név arra kell, hogy látszódjon, ki rögzítette
-  vagy módosította a munkalapot. Ugyanaz a név (kis- és nagybetűtől függetlenül) mindig ugyanazt a felhasználót jelenti.
-- **Közös alkalmazáskulcs (`APP_KEY`)**: a VPS az internetről bárki számára elérhető, ezért egy közös
-  kulcsot kell beírni az appba. Enélkül bárki tudna adatot írni a szerverre. Ezt nem a felhasználóknak
-  kell megjegyezniük, egyszer kerül bele az appba.
-- **Minden munkalapnál eltárolja**, ki hozta létre, ki módosította utoljára, melyik eszközről és mikor.
-- **Szinkron több eszköz között**: offline mentett munkalapok felküldése, a másoktól jött változások letöltése, mindez egy hívással.
-- **Semmi nem vész el**: minden felülírt vagy törölt változat bekerül az előzményekbe. A törlés csak megjelölés.
-- **Keresés** név, szabad szöveg, dátum, állapot és eszköz szerint. A böngészős felület a szerver címén érhető el.
-- Az adatbázis **SQLite**, egyetlen fájl (`data/munkalap.db`), így a mentés egy fájl másolása.
+**Mi történik a „PDF GENERÁLÁS ÉS KÜLDÉS” gombra:**
+1. Az app elkészíti a PDF-et, mint eddig.
+2. Az adatokat, a két aláírást és a PDF-et elmenti a telefonra (várólista), majd felküldi a szerverre.
+3. A szerver elmenti az adatbázisba, és **a szerver küldi el e-mailben** a PDF-et az ügyfélnek, másolatban a szerelőnek.
+   A Gmail jelszó így már nincs benne az appban.
+4. Ha nincs net, a munkalap a telefonon marad, és a következő alkalommal automatikusan felmegy
+   (app indításkor, a következő beküldéskor vagy a „Korábbi munkalapok” megnyitásakor).
+5. Megnyílik a nyomtatás / megtekintés ablak, mint eddig.
+
+**Bejelentkezés:** e-mail címmel, jelszó nélkül, ahogy eddig. A szerver ebből tudja, ki rögzítette a munkalapot.
+
+**Keresés:**
+- **Appban:** a felső sávban az óra ikon nyitja a „Korábbi munkalapok” képernyőt. Itt keresni lehet, és meg
+  lehet nyitni egy munkalap PDF-jét, aláírásait, illetve újra lehet küldeni e-mailben.
+- **Böngészőben:** a szerver címét megnyitva ugyanez elérhető, számítógépről is.
 
 ## Felépítés
 
 ```
-server/            Node.js + Express szerver
-  src/db.js          adatbázis-séma
-  src/app.js         API végpontok
-  public/index.html  böngészős kereső felület
-  test/              automata tesztek (npm test)
-kliens-minta/      minta kód az app bekötéséhez (Flutter és React Native)
-docker-compose.yml telepítés Dockerrel
+app/lib/
+  main.dart                 az app (módosítva: szerverre mentés, e-mail a szerverről, új gombok)
+  munkalap_api.dart         kapcsolat a szerverrel + várólista net nélküli munkához
+  korabbi_munkalapok.dart   Korábbi munkalapok képernyő (keresés, PDF, e-mail újraküldés)
+server/                     Node.js + Express + SQLite szerver
+  src/app.js                API végpontok
+  src/db.js                 adatbázis-séma
+  public/index.html         böngészős kereső felület
+  test/                     automata tesztek (npm test)
+docker-compose.yml          telepítés Dockerrel
 ```
 
-## Telepítés a VPS-re
+## 1. A szerver telepítése a VPS-re
 
-### A) Dockerrel (ajánlott)
+### Dockerrel (ajánlott)
 
 ```bash
 git clone https://github.com/AlexanderKristof/CloudMUNKALAP.git
 cd CloudMUNKALAP
 cp .env.example .env
-nano .env            # APP_KEY=egy hosszú véletlen szöveg, pl. az: openssl rand -hex 24 kimenete
+nano .env                 # APP_KEY, SMTP_USER, SMTP_PASS kitöltése
 docker compose up -d --build
 ```
 
-Az adatbázis a `CloudMUNKALAP/data/munkalap.db` fájlban lesz.
+- Az `APP_KEY` egy hosszú, véletlen szöveg. Előállítható például az `openssl rand -hex 24` paranccsal.
+  **Ugyanezt kell beírni az appba is.**
+- Az `SMTP_USER` / `SMTP_PASS` az a Gmail cím és alkalmazásjelszó, ami eddig az appban volt.
+  **Javasolt új alkalmazásjelszót létrehozni, és a régit törölni**, mert a régi benne van a telefonokra
+  már feltelepített appban.
 
-### B) Docker nélkül (Node.js 20+)
+Minden adat a `CloudMUNKALAP/data/` mappában van: az adatbázis (`munkalap.db`) és a PDF-ek, aláírások (`files/`).
+
+### Docker nélkül (Node.js 20+)
 
 ```bash
 cd CloudMUNKALAP/server
 npm ci --omit=dev
-APP_KEY=a-kulcsod PORT=3000 DB_FILE=/var/lib/munkalap/munkalap.db node src/index.js
+APP_KEY=... SMTP_USER=... SMTP_PASS=... DATA_DIR=/var/lib/munkalap node src/index.js
 ```
 
-Ha automatikusan indulnia kell, systemd szolgáltatás kell hozzá, például `/etc/systemd/system/munkalap.service` néven:
+Ha automatikusan indulnia kell, systemd szolgáltatás kell hozzá: `/etc/systemd/system/munkalap.service`
 
 ```ini
 [Unit]
@@ -57,8 +71,9 @@ After=network.target
 
 [Service]
 WorkingDirectory=/opt/CloudMUNKALAP/server
-Environment=APP_KEY=a-kulcsod
-Environment=DB_FILE=/var/lib/munkalap/munkalap.db
+EnvironmentFile=/opt/CloudMUNKALAP/.env
+Environment=DATA_DIR=/var/lib/munkalap
+Environment=TZ=Europe/Budapest
 ExecStart=/usr/bin/node src/index.js
 Restart=always
 
@@ -68,11 +83,11 @@ WantedBy=multi-user.target
 
 Utána: `systemctl enable --now munkalap`.
 
-### HTTPS (fontos!)
+### HTTPS (kötelező a telefonos apphoz)
 
-Az Android és az iOS alapból **nem enged sima `http://` kapcsolatot**, ezért a szervert HTTPS mögé kell tenni.
-A legegyszerűbb a [Caddy](https://caddyserver.com), mert magától intéz ingyenes tanúsítványt. Ehhez kell egy
-domain vagy aldomain, ami a VPS IP-címére mutat. A `/etc/caddy/Caddyfile` tartalma:
+Az Android és az iOS alapból **nem enged sima `http://` kapcsolatot**. Kell egy domain vagy aldomain,
+ami a VPS IP-címére mutat, és elé egy [Caddy](https://caddyserver.com), ami magától intéz ingyenes tanúsítványt.
+A `/etc/caddy/Caddyfile` tartalma:
 
 ```
 munkalap.sajatdomain.hu {
@@ -85,68 +100,71 @@ csak a Caddy-n keresztül legyen elérhető.
 
 ### Beállítások (környezeti változók)
 
-| Változó      | Alapérték            | Jelentés |
-|--------------|----------------------|----------|
-| `APP_KEY`    | nincs                | Közös kulcs, ezt kell az appnak küldenie belépéskor. **Állítsd be!** |
-| `PORT`       | `3000`               | Port |
-| `DB_FILE`    | `./data/munkalap.db` | Az adatbázis fájl helye |
-| `BODY_LIMIT` | `25mb`               | Egy kérés maximális mérete (pl. ha fotó vagy aláírás is van a munkalapban) |
+| Változó          | Alapérték              | Jelentés |
+|------------------|------------------------|----------|
+| `APP_KEY`        | nincs                  | Közös kulcs, az app ezzel jelentkezik be. **Állítsd be!** |
+| `SMTP_USER`      | nincs                  | E-mail fiók a küldéshez (Gmail cím). Ha nincs megadva, az e-mail küldés ki van kapcsolva |
+| `SMTP_PASS`      | nincs                  | Jelszó (Gmailnél alkalmazásjelszó) |
+| `SMTP_HOST`      | `smtp.gmail.com`       | SMTP szerver |
+| `SMTP_PORT`      | `465`                  | SMTP port |
+| `MAIL_FROM_NAME` | `DR Industrie Szerviz` | A feladó neve az e-mailben |
+| `DATA_DIR`       | `./data`               | Adatbázis és fájlok helye |
+| `PORT`           | `3000`                 | Port |
 
 ### Biztonsági mentés
 
+Ezt a két dolgot kell menteni: az adatbázist és a `files` mappát.
+
 ```bash
-sqlite3 data/munkalap.db ".backup 'mentes-$(date +%F).db'"
+sqlite3 data/munkalap.db ".backup 'mentes/munkalap-$(date +%F).db'"
+tar czf mentes/fajlok-$(date +%F).tar.gz data/files
 ```
 
 Ezt cronból naponta érdemes futtatni.
 
-## Az app bekötése
+## 2. Az app frissítése
 
-A `kliens-minta/` mappában van egy kész osztály Flutterhez (`munkalap_api.dart`) és egy React Native-hoz
-(`munkalapApi.js`). A lépések:
+1. Az `app/lib/` mappa három fájlját másold be a Flutter projekt `lib/` mappájába:
+   `main.dart`, `munkalap_api.dart`, `korabbi_munkalapok.dart`.
+2. A `munkalap_api.dart` elején írd át a két beállítást:
+   ```dart
+   const String kSzerverCim = 'https://munkalap.sajatdomain.hu';
+   const String kAppKulcs = 'ugyanaz, mint a szerveren az APP_KEY';
+   ```
+3. Függőségek a `pubspec.yaml`-ban:
+   ```bash
+   flutter pub remove mailer
+   flutter pub add http uuid path_provider
+   ```
+4. Az `android/app/src/main/AndroidManifest.xml`-ben legyen internet engedély (a `<manifest>` alatt, az
+   `<application>` elé). Enélkül a kiadott (release) app nem éri el a szervert:
+   ```xml
+   <uses-permission android:name="android.permission.INTERNET"/>
+   ```
 
-1. **Első indításkor** kérd be a nevet, és hívd meg a `login(nev)`-et. A token el lesz mentve, így
-   legközelebb a `betolt()` igazat ad, és nem kell újra belépni.
-2. **Új munkalapnál** generálj azonosítót (`ujAzonosito()`, UUID), és tedd bele a munkalap `id` mezőjébe.
-   Mivel az azonosítót a telefon adja, offline is lehet munkalapot létrehozni, és két telefon sem ütközik.
-3. **Mentéskor**: ha van net, `mentes(munkalap)`. Ha nincs, `sorbaAllit(munkalap)`.
-4. **Indításkor vagy frissítéskor**: `szinkron()`. Felküldi a várólistát, és visszaadja a más eszközökön
-   változott munkalapokat. Ezeket id alapján írd felül a helyi tárolóban, a `deleted: true` jelzésűeket töröld.
-
-A szerver a munkalapot **úgy tárolja, ahogy az app küldi** (tetszőleges JSON objektum). A kereséshez
-ezeket a mezőket külön is kiemeli, ha megtalálja őket:
-
-| Oszlop         | Elfogadott mezőnevek a munkalapban |
-|----------------|------------------------------------|
-| `munkalapszam` | `munkalapszam`, `munkalapSzam`, `szam`, `sorszam`, `number` |
-| `ugyfel`       | `ugyfel`, `ugyfelNev`, `ugyfelnev`, `megrendelo`, `customer`, `customerName` (vagy `{ "nev": ... }` objektum) |
-| `datum`        | `datum`, `date`, `kelt`, `munkavegzesDatuma` (ajánlott formátum: `2026-10-05`) |
-| `allapot`      | `allapot`, `statusz`, `status`, `state` |
-
-A szabad szöveges keresés a munkalap teljes tartalmában keres.
+**Fontos – net nélküli munka:** az app a PDF betűtípusait (`PdfGoogleFonts`) az internetről tölti le.
+Net nélkül ezért már a PDF elkészítése elakad, a munkalap el sem jut a várólistáig. Ha net nélkül is
+dolgoztok, a Roboto betűtípust érdemes az appba csomagolni (`assets/` mappa), és onnan betölteni.
 
 ## API röviden
 
-Minden végpont `/api` alatt van. A belépés után a tokent `Authorization: Bearer <token>` fejlécben kell küldeni.
+Minden végpont `/api` alatt van. Belépés után a tokent `Authorization: Bearer <token>` fejlécben kell küldeni.
 
 | Kérés | Leírás |
 |-------|--------|
-| `POST /api/login` `{ name, deviceId, deviceName }` + `X-App-Key` fejléc | Belépés névvel. Válasz: `{ token, user }` |
-| `POST /api/logout` | Kilépés |
-| `GET /api/me` | Ki vagyok |
-| `GET /api/users` | Felhasználók és a munkalapjaik száma |
-| `GET /api/worksheets?q=&user=&from=&to=&allapot=&device=&limit=&offset=` | Keresés. A `user` lehet id vagy név |
+| `POST /api/login` `{ email, deviceId, deviceName }` + `X-App-Key` fejléc | Belépés e-mail címmel. Válasz: `{ token, user }` |
+| `PUT /api/worksheets/:id` (multipart: `data`, `kuldes`, `pdf`, `alairasUgyfel`, `alairasSzerviz`) | Munkalap mentése. `kuldes=1` esetén e-mailt is küld (csak egyszer, ismételt beküldéskor nem küldi újra) |
+| `GET /api/worksheets?q=&user=&from=&to=` | Keresés. A `user` lehet id vagy e-mail; `from`/`to` a rögzítés napja (`2026-10-06`) |
 | `GET /api/worksheets/:id` | Egy munkalap |
+| `GET /api/worksheets/:id/files/pdf` (vagy `alairasUgyfel`, `alairasSzerviz`) | Fájl letöltése |
+| `POST /api/worksheets/:id/email` `{ to }` | E-mail (újra)küldése |
 | `GET /api/worksheets/:id/history` | Korábbi változatok |
-| `PUT /api/worksheets/:id` `{ data, baseVersion }` | Mentés (új vagy módosítás) |
-| `POST /api/worksheets` `{ data }` | Új munkalap, az azonosítót a szerver adja |
-| `DELETE /api/worksheets/:id` | Törlés (csak megjelölés) |
-| `POST /api/sync` `{ since, changes: [{ id, data, deleted, baseVersion }] }` | Szinkron. Válasz: `{ results, items, cursor, hasMore }` |
+| `DELETE /api/worksheets/:id` | Törlés (csak megjelölés, az adat megmarad) |
+| `GET /api/users` | Felhasználók és munkalapjaik száma |
+| `POST /api/sync` | Szinkron több eszköz között (változások lekérése egy kurzor óta) |
 
-**Ütközés:** ha két telefon ugyanazt a munkalapot módosítja, az utolsó mentés lesz az aktuális. Ha az app
-elküldi a `baseVersion`-t (azt a verziószámot, amiből a módosítás kiindult), és közben valaki más már
-mentett, a válaszban `conflict: true` jön. Ilyenkor az app figyelmeztethet, a korábbi változat pedig ott
-van a `/history` alatt.
+A munkalap adatai (`data`) az app mezőnevei szerint: `driSzam`, `ugyfel`, `ugyfelEmail`, `helyszin`, `gep`,
+`idotartam`, `km`, `elvegzettMunka`, `hibaLeiras`, `datum`.
 
 ## Fejlesztés
 
