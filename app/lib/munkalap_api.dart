@@ -11,7 +11,7 @@ import 'package:uuid/uuid.dart';
 // ---------------------------------------------------------------------------
 // SZERVER BEÁLLÍTÁSOK – ezt a kettőt kell átírni a saját VPS-hez
 // ---------------------------------------------------------------------------
-const String kSzerverCim = 'https://munkalap.sajatdomain.hu';
+const String kSzerverCim = 'https://munkalap.drindustrie.hu';
 const String kAppKulcs = 'IDE_JON_AZ_APP_KEY';
 
 /// Egy munkalap beküldésének eredménye.
