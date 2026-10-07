@@ -246,7 +246,7 @@ class MunkalapApi {
     if (csakSajat) user = (await SharedPreferences.getInstance()).getString('user_email');
     final uri = Uri.parse('$kSzerverCim/api/worksheets').replace(queryParameters: {
       if (q != null && q.trim().isNotEmpty) 'q': q.trim(),
-      if (user != null) 'user': user,
+      'user': ?user,
       'limit': '$limit',
     });
     final body = _ellenoriz(await _kuld((h) => http.get(uri, headers: h)));
