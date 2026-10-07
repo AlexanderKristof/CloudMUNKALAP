@@ -346,8 +346,9 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
                 child: pw.Image(bgImage, fit: pw.BoxFit.cover),
               ),
               pw.Positioned(
-                left: 710,
-                top: 55,
+                // A sablonon a "DRI-" felirat után (A4 = 595 x 842 pont)
+                left: 474,
+                top: 51,
                 child: pw.Text(_driSzamController.text, style: pw.TextStyle(font: ttfBold, fontSize: 11, fontWeight: pw.FontWeight.bold)),
               ),
               pw.Positioned(
@@ -400,15 +401,15 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
               ),
               if (ugyfelImg != null)
                 pw.Positioned(
-                  left: 45,
-                  top: 645,
-                  child: pw.Image(ugyfelImg, width: 160, height: 40),
+                  left: 35,
+                  top: 632,
+                  child: pw.Image(ugyfelImg, width: 180, height: 52),
                 ),
               if (szervizImg != null)
                 pw.Positioned(
-                  left: 385,
-                  top: 645,
-                  child: pw.Image(szervizImg, width: 160, height: 40),
+                  left: 372,
+                  top: 632,
+                  child: pw.Image(szervizImg, width: 180, height: 52),
                 ),
             ],
           );
@@ -562,12 +563,12 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
                 const SizedBox(height: 16),
 
                 const Text('Ügyfél aláírása:', style: TextStyle(fontWeight: FontWeight.bold)),
-                Container(decoration: BoxDecoration(border: Border.all(color: Colors.grey)), child: Signature(controller: _ugyfelSigController, height: 110, backgroundColor: Colors.grey[100]!)),
+                Container(decoration: BoxDecoration(border: Border.all(color: Colors.grey)), child: Signature(controller: _ugyfelSigController, height: 180, backgroundColor: Colors.grey[100]!)),
                 TextButton(onPressed: () => _ugyfelSigController.clear(), child: const Text('Aláírás törlése')),
 
                 const SizedBox(height: 10),
                 const Text('Szerviz aláírása:', style: TextStyle(fontWeight: FontWeight.bold)),
-                Container(decoration: BoxDecoration(border: Border.all(color: Colors.grey)), child: Signature(controller: _szervizSigController, height: 110, backgroundColor: Colors.grey[100]!)),
+                Container(decoration: BoxDecoration(border: Border.all(color: Colors.grey)), child: Signature(controller: _szervizSigController, height: 180, backgroundColor: Colors.grey[100]!)),
                 TextButton(onPressed: () => _szervizSigController.clear(), child: const Text('Aláírás törlése')),
 
                 CheckboxListTile(
