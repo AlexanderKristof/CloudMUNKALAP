@@ -125,7 +125,7 @@ class _KorabbiMunkalapokScreenState extends State<KorabbiMunkalapokScreen> {
                   : ListView.separated(
                       physics: const AlwaysScrollableScrollPhysics(),
                       itemCount: _lista.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      separatorBuilder: (_, _) => const Divider(height: 1),
                       itemBuilder: (context, i) {
                         final w = _lista[i];
                         final email = w['email'] as Map<String, dynamic>;
