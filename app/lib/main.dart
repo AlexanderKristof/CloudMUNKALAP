@@ -348,7 +348,7 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
               pw.Positioned(
                 // A sablonon a "DRI-" felirat után (A4 = 595 x 842 pont)
                 left: 474,
-                top: 51,
+                top: 53,
                 child: pw.Text(_driSzamController.text, style: pw.TextStyle(font: ttfBold, fontSize: 11, fontWeight: pw.FontWeight.bold)),
               ),
               pw.Positioned(
@@ -402,14 +402,26 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
               if (ugyfelImg != null)
                 pw.Positioned(
                   left: 35,
-                  top: 632,
-                  child: pw.Image(ugyfelImg, width: 180, height: 52),
+                  top: 626,
+                  // Középre és az aláírásvonalra igazítva, arányosan kicsinyítve
+                  child: pw.Container(
+                    width: 180,
+                    height: 60,
+                    alignment: pw.Alignment.bottomCenter,
+                    child: pw.Image(ugyfelImg, fit: pw.BoxFit.contain),
+                  ),
                 ),
               if (szervizImg != null)
                 pw.Positioned(
                   left: 372,
-                  top: 632,
-                  child: pw.Image(szervizImg, width: 180, height: 52),
+                  top: 626,
+                  // Középre és az aláírásvonalra igazítva, arányosan kicsinyítve
+                  child: pw.Container(
+                    width: 180,
+                    height: 60,
+                    alignment: pw.Alignment.bottomCenter,
+                    child: pw.Image(szervizImg, fit: pw.BoxFit.contain),
+                  ),
                 ),
             ],
           );
