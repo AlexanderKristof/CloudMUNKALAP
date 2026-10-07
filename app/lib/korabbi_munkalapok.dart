@@ -233,6 +233,35 @@ class _MunkalapReszletekScreenState extends State<MunkalapReszletekScreen> {
     }
   }
 
+  Future<void> _torles() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Munkalap törlése'),
+        content: Text('Biztosan törlöd a DRI-${_w['munkalapszam'] ?? ''} munkalapot?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Mégse')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Törlés'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _dolgozik = true);
+    try {
+      await MunkalapApi.instance.torles(_w['id'] as String);
+      if (!mounted) return;
+      _uzenet('Munkalap törölve.');
+      Navigator.pop(context);
+    } catch (e) {
+      _uzenet('Nem sikerült törölni: $e');
+      if (mounted) setState(() => _dolgozik = false);
+    }
+  }
+
   void _uzenet(String szoveg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(szoveg)));
@@ -271,6 +300,13 @@ class _MunkalapReszletekScreenState extends State<MunkalapReszletekScreen> {
         title: Text('DRI-${_w['munkalapszam'] ?? ''}'),
         backgroundColor: Colors.deepOrange,
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.delete),
+            tooltip: 'Törlés',
+            onPressed: _dolgozik ? null : _torles,
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),

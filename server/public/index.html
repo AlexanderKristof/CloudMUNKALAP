@@ -21,6 +21,7 @@
   button, a.btn { background:var(--accent); color:#fff; border:1px solid var(--accent); cursor:pointer; border-radius:8px; padding:8px 12px; text-decoration:none; display:inline-block; }
   button.secondary { background:none; color:var(--accent); }
   button.link { background:none; border:none; color:var(--accent); padding:0; }
+  button.danger { background:none; color:var(--danger); border-color:var(--danger); margin-left:auto; }
   .filters { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:8px; }
   table { width:100%; border-collapse:collapse; }
   th, td { text-align:left; padding:8px; border-bottom:1px solid var(--line); vertical-align:top; }
@@ -85,6 +86,7 @@
         <input id="resendTo" type="email" placeholder="Címzett (alapból az ügyfél)">
         <button id="resend" class="secondary">E-mail küldése</button>
         <span id="emailInfo" class="muted"></span>
+        <button id="deleteBtn" class="danger">Törlés</button>
       </div>
       <dl id="detailFields" class="fields"></dl>
       <div id="detailSigs" class="sigs"></div>
@@ -235,6 +237,16 @@ $('resend').addEventListener('click', async () => {
     if (r.status === 'kuldve') $('emailInfo').innerHTML = `<span class="ok">Elküldve: ${esc(r.to)}</span>`;
   } catch (err) { $('emailInfo').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
   $('resend').disabled = false;
+});
+
+$('deleteBtn').addEventListener('click', async () => {
+  const nev = current.munkalapszam ? 'DRI-' + current.munkalapszam : 'ezt a munkalapot';
+  if (!confirm(`Biztosan törlöd: ${nev}?`)) return;
+  try {
+    await api(`/worksheets/${encodeURIComponent(current.id)}`, { method: 'DELETE' });
+    $('detail').classList.add('hidden');
+    search(true);
+  } catch (err) { alert('Nem sikerült törölni: ' + err.message); }
 });
 
 token ? showApp().catch(() => {}) : showLogin();

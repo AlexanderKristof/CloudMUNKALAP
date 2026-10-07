@@ -261,6 +261,12 @@ class MunkalapApi {
     return res.bodyBytes;
   }
 
+  /// Munkalap törlése. A szerveren csak töröltnek jelöli, az adat visszaállítható.
+  Future<void> torles(String id) async {
+    final uri = Uri.parse('$kSzerverCim/api/worksheets/${Uri.encodeComponent(id)}');
+    _ellenoriz(await _kuld((h) => http.delete(uri, headers: h)));
+  }
+
   /// A munkalap PDF-jének (újra)küldése e-mailben. Ha [cimzett] üres, az ügyfél címére megy.
   Future<BekuldesEredmeny> emailKuldes(String id, {String? cimzett}) async {
     final uri = Uri.parse('$kSzerverCim/api/worksheets/${Uri.encodeComponent(id)}/email');
