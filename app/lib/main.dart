@@ -174,6 +174,8 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
   // a munkalap frissül (nem lesz duplikált), az "Új munkalap" gomb ad újat.
   String _munkalapId = MunkalapApi.ujAzonosito();
   bool _kuldesFolyamatban = false;
+  // Alapból nem megy ki e-mail, csak ha bepipálják (vagy később a Korábbi munkalapok képernyőről).
+  bool _emailKuldes = false;
 
   @override
   void initState() {
@@ -214,10 +216,13 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
     _datumController.text = 'Miskolc, ${DateTime.now().year}.${DateTime.now().month}.${DateTime.now().day}.';
     _ugyfelSigController.clear();
     _szervizSigController.clear();
-    setState(() => _munkalapId = MunkalapApi.ujAzonosito());
+    setState(() {
+      _munkalapId = MunkalapApi.ujAzonosito();
+      _emailKuldes = false;
+    });
   }
 
-  // PDF generálás, beküldés a szerverre (ami elmenti és elküldi e-mailben az ügyfélnek),
+  // PDF generálás, mentés a szerverre (ha be van pipálva, a szerver e-mailben is elküldi az ügyfélnek),
   // majd a nyomtatási / megtekintési ablak.
   Future<void> _bekuldes() async {
     if (_kuldesFolyamatban || !_formKey.currentState!.validate()) return;
@@ -233,6 +238,7 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
         pdf: pdfBytes,
         alairasUgyfel: ugyfelBytes,
         alairasSzerviz: szervizBytes,
+        emailKuldes: _emailKuldes,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -564,6 +570,14 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
                 Container(decoration: BoxDecoration(border: Border.all(color: Colors.grey)), child: Signature(controller: _szervizSigController, height: 110, backgroundColor: Colors.grey[100]!)),
                 TextButton(onPressed: () => _szervizSigController.clear(), child: const Text('Aláírás törlése')),
 
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('PDF elküldése e-mailben az ügyfélnek'),
+                  value: _emailKuldes,
+                  onChanged: (v) => setState(() => _emailKuldes = v ?? false),
+                ),
+
                 const SizedBox(height: 20),
                 SizedBox(
                   width: double.infinity,
@@ -574,7 +588,7 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
                     icon: _kuldesFolyamatban
                         ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                         : const Icon(Icons.picture_as_pdf),
-                    label: const Text('PDF GENERÁLÁS ÉS KÜLDÉS', style: TextStyle(fontSize: 16)),
+                    label: Text(_emailKuldes ? 'PDF GENERÁLÁS, MENTÉS ÉS KÜLDÉS' : 'PDF GENERÁLÁS ÉS MENTÉS', style: const TextStyle(fontSize: 16)),
                   ),
                 ),
                 const SizedBox(height: 30),

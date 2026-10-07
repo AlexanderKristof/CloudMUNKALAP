@@ -36,7 +36,7 @@ class BekuldesEredmeny {
       case 'hiba':
         return 'Munkalap mentve, de az e-mail nem ment ki: ${emailHiba ?? ''}';
       default:
-        return 'Munkalap mentve. ${emailHiba ?? ''}'.trim();
+        return emailStatus == null ? 'Munkalap mentve.' : 'Munkalap mentve. ${emailHiba ?? ''}'.trim();
     }
   }
 }
@@ -159,7 +159,7 @@ class MunkalapApi {
     required Uint8List pdf,
     Uint8List? alairasUgyfel,
     Uint8List? alairasSzerviz,
-    bool emailKuldes = true,
+    bool emailKuldes = false,
   }) async {
     final dir = Directory('${(await _varolistaMappa()).path}/$id');
     await dir.create(recursive: true);

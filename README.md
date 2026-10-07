@@ -3,11 +3,13 @@
 A munkalapprogram (Flutter app) és a hozzá tartozó, VPS-en futó szerver. Több szerelő több telefonról
 küld be munkalapot, a szerver egy helyen tárolja őket, és kereshetővé teszi.
 
-**Mi történik a „PDF GENERÁLÁS ÉS KÜLDÉS” gombra:**
+**Mi történik a „PDF GENERÁLÁS ÉS MENTÉS” gombra:**
 1. Az app elkészíti a PDF-et, mint eddig.
 2. Az adatokat, a két aláírást és a PDF-et elmenti a telefonra (várólista), majd felküldi a szerverre.
-3. A szerver elmenti az adatbázisba, és **a szerver küldi el e-mailben** a PDF-et az ügyfélnek, másolatban a szerelőnek.
-   A Gmail jelszó így már nincs benne az appban.
+3. A szerver elmenti az adatbázisba. **E-mail alapból nem megy ki.** Ha a gomb fölött bepipálják a
+   „PDF elküldése e-mailben az ügyfélnek” négyzetet, akkor **a szerver küldi el** a PDF-et az ügyfélnek, másolatban
+   a szerelőnek. Utólag is elküldhető a „Korábbi munkalapok” képernyőről vagy a böngészős felületről.
+   Az e-mail küldéshez a szerveren be kell állítani az `SMTP_USER` / `SMTP_PASS` értékeket, addig a mentés e-mail nélkül működik.
 4. Ha nincs net, a munkalap a telefonon marad, és a következő alkalommal automatikusan felmegy
    (app indításkor, a következő beküldéskor vagy a „Korábbi munkalapok” megnyitásakor).
 5. Megnyílik a nyomtatás / megtekintés ablak, mint eddig.
