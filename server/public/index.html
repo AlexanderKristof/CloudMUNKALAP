@@ -1,10 +1,22 @@
 <!doctype html>
+<!--
+  DR INDUSTRIE – MUNKALAPOK böngészős felület
+  A szerver ezt az oldalat adja ki a https://munkalap.drindustrie.hu címen.
+  A VPS-en itt van: /opt/munkalap/server/public/index.html
+  (Módosítás után nem kell újraindítani a szervert, elég a böngészőben Ctrl+F5.)
+
+  Felépítés:
+    <style>   – kinézet (színek, elrendezés; világos és sötét mód)
+    <main>    – bejelentkezés, kereső, munkalap részletek, lista
+    <script>  – működés: a szerver /api/... címeit hívja
+-->
 <html lang="hu">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DR Munkalapok</title>
 <style>
+  /* Színek: világos mód (alább a sötét mód felülírja) */
   :root { --bg:#f5f6f8; --card:#fff; --text:#1d2330; --muted:#677085; --line:#dde1e8; --accent:#d84315; --ok:#2e7d32; --danger:#c62828; }
   @media (prefers-color-scheme: dark) {
     :root { --bg:#14171c; --card:#1d2128; --text:#e6e9ef; --muted:#9aa3b5; --line:#2e343e; --accent:#ff7043; --ok:#66bb6a; --danger:#ef5350; }
@@ -56,6 +68,7 @@
 </header>
 
 <main>
+  <!-- Bejelentkezés: e-mail cím + alkalmazáskulcs (a kulcs mező csak akkor látszik, ha a szerver kéri) -->
   <form id="login" class="card hidden">
     <h2 style="margin-top:0">Bejelentkezés</h2>
     <label for="email">E-mail cím</label>
@@ -68,7 +81,9 @@
     <p id="loginErr" class="err"></p>
   </form>
 
+  <!-- Bejelentkezés után látható rész -->
   <section id="appView" class="hidden">
+    <!-- Kereső: szabad szöveg, felhasználó, dátum (rögzítés napja) -->
     <form id="search" class="card filters">
       <input id="q" placeholder="Keresés (szám, ügyfél, gép, szöveg)">
       <select id="user"><option value="">Mindenki</option></select>
@@ -77,6 +92,7 @@
       <button type="submit">Keresés</button>
     </form>
 
+    <!-- Egy munkalap részletei (a listában egy sorra kattintva nyílik meg) -->
     <div id="detail" class="card hidden">
       <button class="link" id="closeDetail">&larr; Vissza a listához</button>
       <h2 id="detailTitle"></h2>
@@ -94,6 +110,7 @@
       <div id="detailHistory" class="muted"></div>
     </div>
 
+    <!-- Találati lista -->
     <div id="listCard" class="card">
       <p id="count" class="muted"></p>
       <div class="table-wrap">
@@ -108,15 +125,18 @@
 </main>
 
 <script>
+// Rövidítés: $('azonosito') = az oldal azon eleme, aminek ez az id-je.
 const $ = (id) => document.getElementById(id);
+// A böngésző helyi tárolója (itt jegyezzük meg a belépést). Hibatűrő: ha nem elérhető, nem omlik össze.
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} },
 };
-let token = store.get('munkalap_token');
-let offset = 0;
-let current = null;
+let token = store.get('munkalap_token'); // a belépési token (ha korábban már beléptünk ebben a böngészőben)
+let offset = 0; // lapozás: hány találatot töltöttünk már be
+let current = null; // a részleteknél éppen megnyitott munkalap
 
+// A részleteknél megjelenített mezők: [kulcs a munkalap adataiban, felirat, (formázó)].
 const FIELDS = [
   ['driSzam', 'Munkalap száma', (v) => v ? 'DRI-' + v : ''],
   ['ugyfel', 'Ügyfél'],
@@ -129,8 +149,11 @@ const FIELDS = [
   ['hibaLeiras', 'Hiba leírása + javaslat'],
   ['datum', 'Hely, dátum'],
 ];
+// Az e-mail állapotok felirata és színe.
 const EMAIL_STATUS = { kuldve: ['Elküldve', 'ok'], hiba: ['Hiba', 'err'], nincs: ['Nem ment ki', 'muted'] };
 
+// Kérés a szerver felé (/api/...), a tokennel. Ha a token már nem érvényes (401) -> vissza a belépéshez.
+// A 422 nem hiba: e-mail küldésnél azt jelzi, hogy nem ment ki, a részletek a válaszban vannak.
 async function api(path, opts = {}) {
   const res = await fetch('/api' + path, {
     ...opts,
@@ -142,12 +165,16 @@ async function api(path, opts = {}) {
   return body;
 }
 
+// Dátum magyar formában, pl. "2026. 10. 08. 9:30"
 const fmtDate = (iso) => iso ? new Date(iso).toLocaleString('hu-HU', { dateStyle: 'short', timeStyle: 'short' }) : '';
+// Szöveg biztonságos beillesztése az oldalba (hogy a munkalapba írt < > jelek ne rontsák el az oldalt).
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+// PDF / aláírás letöltési címe (a token a címben megy, hogy a <img> és a link is működjön).
 const fileUrl = (w, kind) => `/api/worksheets/${encodeURIComponent(w.id)}/files/${kind}?token=${encodeURIComponent(token)}`;
 const who = (p) => p.name ? `${p.name} (${p.email})` : p.email;
 const emailBadge = (e) => { const [t, c] = EMAIL_STATUS[e.status] || [e.status, 'muted']; return `<span class="${c}">${t}</span>`; };
 
+// Bejelentkező űrlap megjelenítése (a kulcs mező csak akkor, ha a szerver kéri).
 async function showLogin() {
   token = null; store.set('munkalap_token', null);
   $('appView').classList.add('hidden'); $('who').classList.add('hidden'); $('login').classList.remove('hidden');
@@ -155,6 +182,7 @@ async function showLogin() {
   $('keyWrap').classList.toggle('hidden', !cfg.appKeyRequired);
 }
 
+// Belépés után: fejléc, felhasználó szűrő feltöltése, lista betöltése.
 async function showApp() {
   const me = await api('/me');
   $('whoName').textContent = me.user.email;
@@ -164,6 +192,7 @@ async function showApp() {
   search(true);
 }
 
+// Keresés a megadott szűrőkkel. reset = true: új keresés; false: "Továbbiak" gomb (következő 50).
 async function search(reset) {
   if (reset) { offset = 0; $('rows').innerHTML = ''; }
   const p = new URLSearchParams({ limit: 50, offset });
@@ -180,6 +209,7 @@ async function search(reset) {
   $('more').classList.toggle('hidden', offset >= r.total);
 }
 
+// Egy munkalap részleteinek kirajzolása (fejléc, gombok, mezők, aláírások).
 function renderDetail(w) {
   current = w;
   $('detailTitle').textContent = [w.munkalapszam && 'DRI-' + w.munkalapszam, w.ugyfel].filter(Boolean).join(' – ') || w.id;
@@ -201,6 +231,7 @@ function renderDetail(w) {
     .map(([k, label]) => `<figure><img src="${fileUrl(w, k)}" alt="${label}"><figcaption class="muted">${label}</figcaption></figure>`).join('');
 }
 
+// Munkalap megnyitása: adatok + korábbi változatok lekérése a szerverről.
 async function openDetail(id) {
   const [w, hist] = await Promise.all([api('/worksheets/' + encodeURIComponent(id)), api('/worksheets/' + encodeURIComponent(id) + '/history')]);
   renderDetail(w);
@@ -212,6 +243,9 @@ async function openDetail(id) {
   $('detail').scrollIntoView({ behavior: 'smooth' });
 }
 
+// --- Gombok és események ---
+
+// Belépés gomb
 $('login').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('loginErr').textContent = '';
@@ -221,11 +255,17 @@ $('login').addEventListener('submit', async (e) => {
     await showApp();
   } catch (err) { $('loginErr').textContent = err.message; }
 });
+// Kilépés
 $('logout').addEventListener('click', async () => { await api('/logout', { method: 'POST' }).catch(() => {}); showLogin(); });
+// Keresés gomb / Enter
 $('search').addEventListener('submit', (e) => { e.preventDefault(); search(true); });
+// Továbbiak gomb (lapozás)
 $('more').addEventListener('click', () => search(false));
+// Kattintás a lista egy sorára -> részletek
 $('rows').addEventListener('click', (e) => { const tr = e.target.closest('tr.row'); if (tr) openDetail(tr.dataset.id); });
+// Vissza a listához
 $('closeDetail').addEventListener('click', () => $('detail').classList.add('hidden'));
+// E-mail küldése (megerősítés után)
 $('resend').addEventListener('click', async () => {
   const to = $('resendTo').value.trim() || current.ugyfelEmail;
   if (!to) { $('emailInfo').innerHTML = '<span class="err">Adj meg címzettet.</span>'; return; }
@@ -239,6 +279,7 @@ $('resend').addEventListener('click', async () => {
   $('resend').disabled = false;
 });
 
+// Törlés (megerősítés után). A szerveren csak töröltnek jelöli, visszaállítható.
 $('deleteBtn').addEventListener('click', async () => {
   const nev = current.munkalapszam ? 'DRI-' + current.munkalapszam : 'ezt a munkalapot';
   if (!confirm(`Biztosan törlöd: ${nev}?`)) return;
@@ -249,6 +290,7 @@ $('deleteBtn').addEventListener('click', async () => {
   } catch (err) { alert('Nem sikerült törölni: ' + err.message); }
 });
 
+// Indulás: ha van mentett belépés, egyből a lista, különben a bejelentkezés.
 token ? showApp().catch(() => {}) : showLogin();
 </script>
 </body>

@@ -1,5 +1,20 @@
 'use strict';
 
+// =============================================================================
+// ADATBÁZIS (SQLite) – a táblák szerkezete és az adatbázis megnyitása
+// =============================================================================
+// Az adatbázis egyetlen fájl: /opt/munkalap/data/munkalap.db
+// A PDF-ek és aláírások NEM itt vannak, hanem fájlként: /opt/munkalap/data/files/<munkalap id>/
+// Táblák:
+//   users             – felhasználók (e-mail cím alapján)
+//   devices           – telefonok / böngészők, amikről beléptek
+//   sessions          – belépési tokenek (ki van éppen bejelentkezve)
+//   worksheets        – a munkalapok (egy sor = egy munkalap)
+//   worksheet_history – a munkalapok korábbi változatai (semmi nem vész el)
+//   meta              – belső számláló a szinkronhoz
+// A "CREATE TABLE IF NOT EXISTS" miatt az első indításkor létrejönnek, később nem nyúl hozzájuk.
+// =============================================================================
+
 const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
@@ -83,17 +98,19 @@ CREATE TABLE IF NOT EXISTS meta (
 INSERT OR IGNORE INTO meta(key, value) VALUES ('seq', 0);
 `;
 
+// Az adatbázis megnyitása (ha még nincs, létrehozza a fájlt és a táblákat).
 function openDb(file) {
+  // A mappa létrehozása, ha még nincs (':memory:' = csak memóriában, a tesztekhez).
   if (file !== ':memory:') {
     fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
   }
   const db = new Database(file);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  db.pragma('busy_timeout = 5000');
+  db.pragma('journal_mode = WAL'); // gyorsabb, és olvasás közben is lehet írni
+  db.pragma('foreign_keys = ON'); // a táblák közti hivatkozások ellenőrzése
+  db.pragma('busy_timeout = 5000'); // ha épp foglalt, max. 5 mp-et vár, mielőtt hibát ad
   // Az SQLite beépített LOWER()/NOCASE csak ASCII betűkre működik, ez az ékezeteseket is kezeli.
   db.function('ulower', { deterministic: true }, (s) => (s === null ? null : String(s).toLocaleLowerCase('hu')));
-  db.exec(SCHEMA);
+  db.exec(SCHEMA); // táblák létrehozása, ha még nincsenek
   return db;
 }
 

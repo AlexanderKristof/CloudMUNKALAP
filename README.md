@@ -26,6 +26,7 @@ küld be munkalapot, a szerver egy helyen tárolja őket, és kereshetővé tesz
 ```
 app/lib/
   main.dart                 az app (módosítva: szerverre mentés, e-mail a szerverről, új gombok)
+  szerver_beallitas.dart    a szerver címe és az alkalmazáskulcs (csak ezt kell átírni)
   munkalap_api.dart         kapcsolat a szerverrel + várólista net nélküli munkához
   korabbi_munkalapok.dart   Korábbi munkalapok képernyő (keresés, PDF, e-mail újraküldés)
 server/                     Node.js + Express + SQLite szerver
@@ -126,9 +127,9 @@ Ezt cronból naponta érdemes futtatni.
 
 ## 2. Az app frissítése
 
-1. Az `app/lib/` mappa három fájlját másold be a Flutter projekt `lib/` mappájába:
-   `main.dart`, `munkalap_api.dart`, `korabbi_munkalapok.dart`.
-2. A `munkalap_api.dart` elején írd át a két beállítást:
+1. Az `app/lib/` mappa fájljait másold be a Flutter projekt `lib/` mappájába:
+   `main.dart`, `szerver_beallitas.dart`, `munkalap_api.dart`, `korabbi_munkalapok.dart`.
+2. A `szerver_beallitas.dart`-ban írd át a két beállítást:
    ```dart
    const String kSzerverCim = 'https://munkalap.sajatdomain.hu';
    const String kAppKulcs = 'ugyanaz, mint a szerveren az APP_KEY';
