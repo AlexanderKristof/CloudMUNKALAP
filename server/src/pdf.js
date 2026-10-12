@@ -107,9 +107,9 @@ async function munkalapPdf(adatok, { alairasUgyfel = null, alairasSzerviz = null
 
   const fekete = rgb(0, 0, 0);
 
-  // Munkalap száma a "DRI-" felirat után (vastag, 11-es betű).
+  // Munkalap száma a "DRI-" felirat után (vastag, 12-es betű, egy vonalon a felirattal).
   if (adatok.driSzam) {
-    lap.drawText(String(adatok.driSzam), { x: 474, y: alapvonal(52, 11), size: 11, font: fontBold, color: fekete });
+    lap.drawText(String(adatok.driSzam), { x: 474, y: alapvonal(51, 12), size: 12, font: fontBold, color: fekete });
   }
 
   // Egysoros mezők (10-es betű).

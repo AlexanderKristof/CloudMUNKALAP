@@ -488,8 +488,8 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
               pw.Positioned(
                 // A sablonon a "DRI-" felirat után (A4 = 595 x 842 pont)
                 left: 474,
-                top: 52,
-                child: pw.Text(_driSzam ?? '', style: pw.TextStyle(font: ttfBold, fontSize: 11, fontWeight: pw.FontWeight.bold)),
+                top: 51, // 12-es betűvel így ül egy vonalon a "DRI-" felirattal
+                child: pw.Text(_driSzam ?? '', style: pw.TextStyle(font: ttfBold, fontSize: 12, fontWeight: pw.FontWeight.bold)),
               ),
               // Ügyfél / Customer
               pw.Positioned(
