@@ -260,3 +260,41 @@ test('konzolos parancs: admin jelszó beállítása a VPS-en', () => {
     fs.rmSync(d, { recursive: true, force: true });
   }
 });
+
+test('hiányzó sablon: a módosított PDF később magától pótlódik, JPG sablon is jó', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'munkalap-sablon-'));
+  const sablon = path.join(d, 'sablon.png');
+  const app = createApp(openDb(':memory:'), { appKey: 'k', filesDir: path.join(d, 'files'), sablonFile: sablon });
+  const srv = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+  const b = `http://127.0.0.1:${srv.address().port}/api`;
+  const kerd = async (method, p, { token, body } = {}) => {
+    const res = await fetch(b + p, { method, headers: { 'content-type': 'application/json', 'x-app-key': 'k', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body && JSON.stringify(body) });
+    return { status: res.status, body: res.headers.get('content-type')?.includes('json') ? await res.json() : await res.arrayBuffer() };
+  };
+  try {
+    const t = (await kerd('POST', '/login', { body: { email: 'x@dri.hu', deviceId: 'd' } })).body.token;
+    await kerd('PUT', '/worksheets/p-1', { token: t, body: { data: { ugyfel: 'A', km: '1' } } });
+    const m = await kerd('PUT', '/worksheets/p-1/modositas', { token: t, body: { data: { km: '2' } } });
+    assert.equal(m.status, 200, 'a módosítás a PDF hibája ellenére is mentődik');
+    let v = (await kerd('GET', '/worksheets/p-1/valtozatok', { token: t })).body;
+    assert.equal(v[1].pdf, false);
+    assert.match(v[1].pdfHiba, /sablon/);
+
+    // Rossz formátumú sablon: érthető hibaüzenet
+    fs.writeFileSync(sablon, 'nem kép');
+    v = (await kerd('GET', '/worksheets/p-1/valtozatok', { token: t })).body;
+    assert.match(v[1].pdfHiba, /nem PNG és nem JPG/);
+
+    // A sablon feltöltése után a következő megnyitáskor elkészül (JPG is jó)
+    fs.copyFileSync(path.join(__dirname, 'fixtures', 'sablon.jpg'), sablon);
+    v = (await kerd('GET', '/worksheets/p-1/valtozatok', { token: t })).body;
+    assert.equal(v[1].pdf, true);
+    assert.equal(v[1].pdfHiba, undefined);
+    const pdf = await kerd('GET', '/worksheets/p-1/valtozatok/1/pdf', { token: t });
+    assert.equal(pdf.status, 200);
+    assert.equal(Buffer.from(pdf.body).subarray(0, 4).toString(), '%PDF');
+  } finally {
+    srv.close();
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+});

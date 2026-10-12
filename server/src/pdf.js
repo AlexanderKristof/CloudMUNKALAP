@@ -94,7 +94,12 @@ async function munkalapPdf(adatok, { alairasUgyfel = null, alairasSzerviz = null
   if (!fs.existsSync(sablonFile)) {
     throw new Error(`Hiányzik a sablon kép: ${sablonFile}`);
   }
-  const hatter = await doc.embedPng(fs.readFileSync(sablonFile));
+  // PNG vagy JPG is lehet (a fájl eleje alapján döntjük el, nem a kiterjesztésből).
+  const kep = new Uint8Array(fs.readFileSync(sablonFile)); // másolat: a kis fájlok Buffer-e egy közös memóriaterület része, amit a pdf-lib rosszul olvas
+  let hatter;
+  if (kep[0] === 0x89 && kep[1] === 0x50) hatter = await doc.embedPng(kep);
+  else if (kep[0] === 0xff && kep[1] === 0xd8) hatter = await doc.embedJpg(kep);
+  else throw new Error(`A sablon kép nem PNG és nem JPG: ${sablonFile}`);
   const arany = Math.max(LAP_SZ / hatter.width, LAP_M / hatter.height);
   const hw = hatter.width * arany;
   const hh = hatter.height * arany;
@@ -128,7 +133,7 @@ async function munkalapPdf(adatok, { alairasUgyfel = null, alairasSzerviz = null
   // Aláírások: 180 x 60-as dobozban, arányosan kicsinyítve, vízszintesen középen, alul a vonalon.
   for (const [png, left] of [[alairasUgyfel, 35], [alairasSzerviz, 372]]) {
     if (!png) continue;
-    const kep = await doc.embedPng(png);
+    const kep = await doc.embedPng(new Uint8Array(png)); // másolat (lásd a sablonnál)
     const sk = Math.min(180 / kep.width, 60 / kep.height);
     const w = kep.width * sk;
     const h = kep.height * sk;

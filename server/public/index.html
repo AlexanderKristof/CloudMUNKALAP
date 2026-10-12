@@ -280,7 +280,7 @@ function valtozatokHtml(id, lista) {
       <b>${esc(v.cim)}</b>
       <span>${fmtDate(v.ts)}</span>
       <span class="muted">${esc(v.ki || '')}</span>
-      ${v.pdf ? `<a href="/api/worksheets/${encodeURIComponent(id)}/valtozatok/${v.sorszam}/pdf?token=${encodeURIComponent(token)}" target="_blank" rel="noopener">PDF megnyitása</a>` : '<span class="muted">nincs PDF</span>'}
+      ${v.pdf ? `<a href="/api/worksheets/${encodeURIComponent(id)}/valtozatok/${v.sorszam}/pdf?token=${encodeURIComponent(token)}" target="_blank" rel="noopener">PDF megnyitása</a>` : (v.pdfHiba ? `<span class="err">Nem készült PDF: ${esc(v.pdfHiba)}</span>` : '<span class="muted">nincs PDF</span>')}
       ${v.valtozasok.length ? `<ul>${v.valtozasok.map((c) => `<li>${esc(MEZO_NEV[c.mezo] || c.mezo)}: <del>${esc(c.elotte) || '(üres)'}</del> → <ins>${esc(c.utana) || '(üres)'}</ins></li>`).join('')}</ul>` : ''}
     </div>`).join('');
 }

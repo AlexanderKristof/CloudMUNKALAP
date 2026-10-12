@@ -398,6 +398,17 @@ function createApp(db, options = {}) {
   // Módosított munkalap PDF-jének elkészítése a szerveren (a régi aláírásokkal és a piros
   // "Módosítás dátuma" felirattal). Ha nem sikerül (pl. hiányzik a sablon.png), a hibát naplózza,
   // és az app által feltöltött PDF marad (ha volt).
+  const pdfHibak = new Map(); // munkalap id -> miért nem sikerült a módosított PDF (pl. hiányzik a sablon)
+
+  // Ha egy módosított munkalap aktuális PDF-je hiányzik (pl. a módosításkor még nem volt fent a sablon),
+  // akkor most elkészítjük. Így a hiba javítása után a PDF magától pótlódik, nem kell újra módosítani.
+  async function pdfPotlas(id) {
+    const row = stmt.wsById.get(id);
+    if (!row || row.deleted || !stmt.modositasokByWs.all(id).length) return;
+    if (fs.existsSync(path.join(filesDir, id, FILES.pdf.file))) return;
+    await modositottPdf(id);
+  }
+
   async function modositottPdf(id) {
     const row = stmt.wsById.get(id);
     const dir = path.join(filesDir, id);
@@ -411,9 +422,11 @@ function createApp(db, options = {}) {
       });
       writeFiles(id, { pdf });
       stmt.updateFileFlags.run({ id, has_pdf: 1, has_alairas_ugyfel: row.has_alairas_ugyfel, has_alairas_szerviz: row.has_alairas_szerviz });
+      pdfHibak.delete(id);
       return true;
     } catch (err) {
       console.error('Módosított PDF készítési hiba:', err.message);
+      pdfHibak.set(id, err.message); // a felületen megjelenik, miért nincs PDF
       const vanPdf = fs.existsSync(path.join(dir, FILES.pdf.file)) ? 1 : 0;
       stmt.updateFileFlags.run({ id, has_pdf: vanPdf, has_alairas_ugyfel: row.has_alairas_ugyfel, has_alairas_szerviz: row.has_alairas_szerviz });
       return false;
@@ -453,6 +466,8 @@ function createApp(db, options = {}) {
       pdf: !!(v.pdfFajl && fs.existsSync(path.join(filesDir, row.id, v.pdfFajl))),
       _pdfFajl: v.pdfFajl,
       valtozasok: i === 0 ? [] : kulonbsegek(lista[i - 1].data, v.data),
+      // Az utolsó (aktuális) változatnál: ha nincs PDF, miért nem sikerült elkészíteni
+      ...(i === lista.length - 1 && i > 0 && pdfHibak.has(row.id) ? { pdfHiba: pdfHibak.get(row.id) } : {}),
     }));
   }
 
@@ -669,7 +684,8 @@ function createApp(db, options = {}) {
   });
 
   // Fájl letöltése: pdf, alairasUgyfel, alairasSzerviz
-  api.get('/worksheets/:id/files/:kind', (req, res) => {
+  api.get('/worksheets/:id/files/:kind', async (req, res) => {
+    if (req.params.kind === 'pdf') await pdfPotlas(getRow(req.params.id).id);
     const row = getRow(req.params.id);
     const f = Object.prototype.hasOwnProperty.call(FILES, req.params.kind) && FILES[req.params.kind];
     if (!f || !row[f.column]) throw new HttpError(404, 'Nincs ilyen fájl.');
@@ -741,13 +757,17 @@ function createApp(db, options = {}) {
   });
 
   // Az eredeti és a módosított változatok listája (a PDF-ek a következő végponton érhetők el).
-  api.get('/worksheets/:id/valtozatok', (req, res) => {
+  api.get('/worksheets/:id/valtozatok', async (req, res) => {
+    await pdfPotlas(getRow(req.params.id).id);
     const row = getRow(req.params.id);
     res.json(valtozatok(row).map(({ _pdfFajl, ...v }) => v));
   });
 
   // Egy változat PDF-je. n = 0 az eredeti, 1 az első módosítás, ...
-  api.get('/worksheets/:id/valtozatok/:n/pdf', (req, res) => valtozatPdfKuldes(res, getRow(req.params.id), req.params.n));
+  api.get('/worksheets/:id/valtozatok/:n/pdf', async (req, res) => {
+    await pdfPotlas(getRow(req.params.id).id);
+    valtozatPdfKuldes(res, getRow(req.params.id), req.params.n);
+  });
 
   // Törlés: csak megjelöljük, az adat és a fájlok megmaradnak.
   api.delete('/worksheets/:id', (req, res) => {
@@ -996,11 +1016,15 @@ function createApp(db, options = {}) {
     });
 
     // Egy munkalap változatai és PDF-jei az adminnak (ugyanaz, mint a sima felületen).
-    r.get('/munkalap/:id/valtozatok', (req, res) => {
+    r.get('/munkalap/:id/valtozatok', async (req, res) => {
+      await pdfPotlas(getRow(req.params.id).id);
       const row = getRow(req.params.id);
       res.json({ item: serialize(row), valtozatok: valtozatok(row).map(({ _pdfFajl, ...v }) => v) });
     });
-    r.get('/munkalap/:id/valtozatok/:n/pdf', (req, res) => valtozatPdfKuldes(res, getRow(req.params.id), req.params.n));
+    r.get('/munkalap/:id/valtozatok/:n/pdf', async (req, res) => {
+      await pdfPotlas(getRow(req.params.id).id);
+      valtozatPdfKuldes(res, getRow(req.params.id), req.params.n);
+    });
 
     // Törölt munkalapok listája és visszaállítás.
     r.get('/torolt', (req, res) => {
