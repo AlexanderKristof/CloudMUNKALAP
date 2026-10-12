@@ -26,8 +26,8 @@ küld be munkalapot, a szerver egy helyen tárolja őket, és kereshetővé tesz
 - Beküldött munkalap **módosítható** a böngészőben (részletek → „Szerkesztés”) és az appban
   (Korábbi munkalapok → munkalap → ceruza ikon).
 - A **DRI szám ugyanaz marad**, az aláírások nem változnak.
-- A szerver **új PDF-et készít**, rajta pirossal, a „Hely, dátum” sor mellett:
-  `Módosítás dátuma: 2026.10.12. 14:35`.
+- A szerver **új PDF-et készít**, rajta pirossal két jelzés: a cím mellett `(MÓDOSÍTVA)`, a „Hely, dátum” sor
+  mellett `Módosítás dátuma: 2026.10.12. 14:35`.
 - A **régi változat és a régi PDF megmarad**. A listában a módosított munkalapoknál „N× módosítva” jelzés és
   egy „Változatok ▾” lenyíló látható. Ebben minden változat megnyitható, és látszik, mi változott (régi → új).
 - Ha a sablont kicserélik, vagy a PDF elrendezése javul, a módosított munkalapok aktuális PDF-je újrakészíthető

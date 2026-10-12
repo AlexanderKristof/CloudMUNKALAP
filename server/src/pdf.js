@@ -106,6 +106,7 @@ async function munkalapPdf(adatok, { alairasUgyfel = null, alairasSzerviz = null
   lap.drawImage(hatter, { x: (LAP_SZ - hw) / 2, y: (LAP_M - hh) / 2, width: hw, height: hh });
 
   const fekete = rgb(0, 0, 0);
+  const PIROS = rgb(0.85, 0.1, 0.1); // a módosítás jelzéseinek színe
 
   // Munkalap száma a "DRI-" felirat után (vastag, 12-es betű, egy vonalon a felirattal).
   if (adatok.driSzam) {
@@ -140,10 +141,13 @@ async function munkalapPdf(adatok, { alairasUgyfel = null, alairasSzerviz = null
     lap.drawImage(kep, { x: left + (180 - w) / 2, y: LAP_M - (626 + 60), width: w, height: h });
   }
 
-  // Módosítás jelzése pirossal, a "Hely, dátum" sor mellett jobbra.
+  // Módosítás jelzése pirossal, két helyen:
+  //   1. a cím ("MUNKALAP SZERVIZ SZOLGÁLTATÁSRA") mellett jobbra: (MÓDOSÍTVA), 12-es félkövér, egy vonalban a címmel
+  //   2. a "Hely, dátum" sor mellett jobbra: Módosítás dátuma: 2026.10.12. 14:35
   if (modositva) {
+    lap.drawText('(MÓDOSÍTVA)', { x: 444, y: LAP_M - 104, size: 12, font: fontBold, color: PIROS });
     lap.drawText(`Módosítás dátuma: ${datumIdo(modositva)}`, {
-      x: 320, y: alapvonal(610, 10), size: 10, font: fontBold, color: rgb(0.85, 0.1, 0.1),
+      x: 320, y: alapvonal(610, 10), size: 10, font: fontBold, color: PIROS,
     });
   }
 
