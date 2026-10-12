@@ -37,6 +37,22 @@ server/                     Node.js + Express + SQLite szerver
 docker-compose.yml          telepítés Dockerrel
 ```
 
+## DRI munkalapszámok
+
+- A számot **a szerver osztja ki**, sorban: `0002001`, `0002002`, ... (7 jegy, elöl nullákkal, mint a papíros tömbökön).
+  Az első szám **0002001**, mert a papíros tömbök utolsó száma 0002000 volt.
+- Az app az új munkalap megnyitásakor lefoglal egy számot, és kiírja (lakat ikonnal), de **szerkeszteni nem lehet**.
+  Beküldéskor a szerver mindig a lefoglalt számot írja a munkalapra, akármit küld az app.
+- **Egyszerre többen** is nyithatnak új munkalapot: a szerver a kéréseket sorban szolgálja ki, ezért két munkalap
+  soha nem kaphat ugyanolyan számot (az adatbázis is tiltja).
+- Ha egy munkalapot nem küldenek be, a lefoglalt szám nem vész el: az app újraindítás után és az „Új munkalap”
+  gomb után is ugyanazt a számot használja, amíg a munkalapot be nem küldik.
+- Törölt munkalap száma nem kerül újra kiosztásra (mint egy elrontott papírlap).
+- A számláló aktuális értéke a VPS-en:
+  ```bash
+  cd /opt/munkalap/server && node -e "const D=require('better-sqlite3');const db=new D('/opt/munkalap/data/munkalap.db');console.log(db.prepare(\"SELECT value FROM meta WHERE key='dri_kovetkezo'\").get())"
+  ```
+
 ## 1. A szerver telepítése a VPS-re
 
 ### Dockerrel (ajánlott)
@@ -111,6 +127,7 @@ csak a Caddy-n keresztül legyen elérhető.
 | `SMTP_HOST`      | `smtp.gmail.com`       | SMTP szerver |
 | `SMTP_PORT`      | `465`                  | SMTP port |
 | `MAIL_FROM_NAME` | `DR Industrie Szerviz` | A feladó neve az e-mailben |
+| `DRI_KEZDO`      | `2001`                 | Az első kiosztandó DRI szám (csak az adatbázis első létrehozásakor számít) |
 | `DATA_DIR`       | `./data`               | Adatbázis és fájlok helye |
 | `PORT`           | `3000`                 | Port |
 
@@ -164,6 +181,7 @@ Minden végpont `/api` alatt van. Belépés után a tokent `Authorization: Beare
 | `GET /api/worksheets/:id/history` | Korábbi változatok |
 | `DELETE /api/worksheets/:id` | Törlés (csak megjelölés, az adat megmarad) |
 | `GET /api/users` | Felhasználók és munkalapjaik száma |
+| `POST /api/dri/foglalas` `{ worksheetId }` | DRI munkalapszám lefoglalása (ugyanarra a munkalapra mindig ugyanazt adja) |
 | `POST /api/sync` | Szinkron több eszköz között (változások lekérése egy kurzor óta) |
 
 A munkalap adatai (`data`) az app mezőnevei szerint: `driSzam`, `ugyfel`, `ugyfelEmail`, `helyszin`, `gep`,

@@ -112,7 +112,8 @@ test('munkalap beküldése PDF-fel és aláírásokkal, e-mail küldés a szerve
   const r = await call('PUT', '/worksheets/ml-1', { token: anna, form: urlap(munkalap(), { kuldes: true }) });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   assert.equal(r.body.email.status, 'kuldve');
-  assert.equal(r.body.item.munkalapszam, '2026-101');
+  assert.equal(r.body.item.munkalapszam, '0002001', 'az első kiosztott szám 0002001, nem az app által küldött');
+  assert.equal(r.body.item.data.driSzam, '0002001');
   assert.equal(r.body.item.ugyfelEmail, 'ugyfel@szabo.hu');
   assert.deepEqual(r.body.item.files, { pdf: true, alairasUgyfel: true, alairasSzerviz: true });
   assert.equal(r.body.item.createdBy.email, 'anna@dri.hu');
@@ -120,8 +121,8 @@ test('munkalap beküldése PDF-fel és aláírásokkal, e-mail küldés a szerve
   assert.equal(sentMails.length, 1);
   assert.equal(sentMails[0].to, 'ugyfel@szabo.hu');
   assert.equal(sentMails[0].cc, 'anna@dri.hu');
-  assert.equal(sentMails[0].subject, 'DR Industrie Munkalap - DRI-2026-101');
-  assert.equal(sentMails[0].attachments[0].filename, 'Munkalap_DRI_2026-101.pdf');
+  assert.equal(sentMails[0].subject, 'DR Industrie Munkalap - DRI-0002001');
+  assert.equal(sentMails[0].attachments[0].filename, 'Munkalap_DRI_0002001.pdf');
   assert.deepEqual(fs.readFileSync(sentMails[0].attachments[0].path), PDF);
 
   // Újrapróbálás (pl. megszakadt a net a válasz előtt): nem lesz új változat és nem megy ki újra az e-mail
@@ -210,19 +211,19 @@ test('keresés felhasználó, szöveg és rögzítési dátum szerint', async ()
   clock = new Date('2026-10-06T10:00:00').getTime();
 
   let r = await call('GET', '/worksheets?user=Cili@dri.hu', { token: dani });
-  assert.deepEqual(r.body.items.map((w) => w.munkalapszam), ['K-11', 'K-10'], 'legújabb elöl');
+  assert.deepEqual(r.body.items.map((w) => w.id), ['k-11', 'k-10'], 'legújabb elöl');
 
   r = await call('GET', `/worksheets?q=${encodeURIComponent('fehér')}`, { token: dani });
-  assert.deepEqual(r.body.items.map((w) => w.munkalapszam), ['D-1', 'K-10']);
+  assert.deepEqual(r.body.items.map((w) => w.id), ['d-1', 'k-10']);
 
   r = await call('GET', `/worksheets?q=${encodeURIComponent('hegesztő')}`, { token: dani });
-  assert.deepEqual(r.body.items.map((w) => w.munkalapszam), ['K-11']);
+  assert.deepEqual(r.body.items.map((w) => w.id), ['k-11']);
 
   r = await call('GET', '/worksheets?q=50%25', { token: dani });
-  assert.deepEqual(r.body.items.map((w) => w.munkalapszam), ['K-10']);
+  assert.deepEqual(r.body.items.map((w) => w.id), ['k-10']);
 
   r = await call('GET', '/worksheets?from=2026-10-01&to=2026-10-03', { token: dani });
-  assert.deepEqual(r.body.items.map((w) => w.munkalapszam), ['D-1', 'K-11']);
+  assert.deepEqual(r.body.items.map((w) => w.id), ['d-1', 'k-11']);
   assert.equal((await call('GET', '/worksheets?from=2026.10.01', { token: dani })).status, 400);
 
   const users = await call('GET', '/users', { token: dani });
@@ -259,4 +260,56 @@ test('szinkron több eszköz között', async () => {
   const paged = await call('POST', '/sync', { token: tel2, body: { since: 0, limit: 1 } });
   assert.equal(paged.body.items.length, 1);
   assert.equal(paged.body.hasMore, true);
+});
+
+test('DRI munkalapszám: a szerver osztja ki, egyedi, sorban, nem módosítható', async () => {
+  const gabi = await login('gabi@dri.hu', 'gabi-tel');
+  const hedi = await login('hedi@dri.hu', 'hedi-tel');
+
+  // Foglalás új munkalaphoz: a szám azonnal látszik, és ugyanarra a munkalapra mindig ugyanaz
+  const f1 = await call('POST', '/dri/foglalas', { token: gabi, body: { worksheetId: 'uj-1' } });
+  assert.equal(f1.status, 200);
+  assert.match(f1.body.driSzam, /^\d{7}$/);
+  const f1b = await call('POST', '/dri/foglalas', { token: hedi, body: { worksheetId: 'uj-1' } });
+  assert.equal(f1b.body.driSzam, f1.body.driSzam, 'ugyanaz a munkalap nem kap új számot');
+
+  // Sokan egyszerre: 50 párhuzamos foglalás, mind különböző és folytonos
+  const kerdesek = Array.from({ length: 50 }, (_, i) =>
+    call('POST', '/dri/foglalas', { token: i % 2 ? gabi : hedi, body: { worksheetId: `parhuzamos-${i}` } }));
+  const szamok = (await Promise.all(kerdesek)).map((r) => Number(r.body.driSzam));
+  assert.equal(new Set(szamok).size, 50, 'nincs két egyforma szám');
+  const rendezett = [...szamok].sort((a, b) => a - b);
+  assert.equal(rendezett[0], Number(f1.body.driSzam) + 1);
+  assert.equal(rendezett[49], Number(f1.body.driSzam) + 50, 'nincs kihagyott szám');
+
+  // Beküldéskor az app által küldött számot figyelmen kívül hagyja, a lefoglaltat írja be
+  const mentes = await call('PUT', '/worksheets/uj-1', { token: gabi, body: { data: munkalap({ driSzam: '9999999' }) } });
+  assert.equal(mentes.body.item.munkalapszam, f1.body.driSzam);
+  const modositas = await call('PUT', '/worksheets/uj-1', { token: gabi, body: { data: munkalap({ driSzam: '1', km: '99' }) } });
+  assert.equal(modositas.body.item.munkalapszam, f1.body.driSzam, 'utólag sem írható át');
+  assert.equal(modositas.body.item.data.km, '99');
+
+  // Foglalás nélkül beküldött új munkalap is kap számot (a következőt)
+  const foglalasNelkul = await call('PUT', '/worksheets/foglalas-nelkul', { token: hedi, body: { data: munkalap() } });
+  assert.equal(Number(foglalasNelkul.body.item.munkalapszam), Number(f1.body.driSzam) + 51);
+
+  // Törlés után a szám nem kerül újra kiosztásra
+  await call('DELETE', '/worksheets/foglalas-nelkul', { token: hedi });
+  const kovetkezo = await call('POST', '/dri/foglalas', { token: hedi, body: { worksheetId: 'uj-2' } });
+  assert.equal(Number(kovetkezo.body.driSzam), Number(f1.body.driSzam) + 52);
+
+  assert.equal((await call('POST', '/dri/foglalas', { token: hedi, body: { worksheetId: '../x' } })).status, 400);
+  assert.equal((await call('POST', '/dri/foglalas', { body: { worksheetId: 'uj-3' } })).status, 401);
+});
+
+test('DRI számláló kezdőértéke és újraindítás', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'munkalap-db-'));
+  const file = path.join(dir, 'proba.db');
+  let db = openDb(file, { driKezdo: 2001 });
+  db.prepare("UPDATE meta SET value = 2050 WHERE key = 'dri_kovetkezo'").run();
+  db.close();
+  db = openDb(file, { driKezdo: 2001 });
+  assert.equal(db.prepare("SELECT value FROM meta WHERE key = 'dri_kovetkezo'").get().value, 2050, 'újraindításkor nem kezdi elölről');
+  db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
 });

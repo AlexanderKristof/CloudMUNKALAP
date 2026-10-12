@@ -17,6 +17,7 @@
 //   POST   /api/worksheets/:id/email        e-mail (újra)küldése
 //   DELETE /api/worksheets/:id              törlés (csak megjelölés)
 //   POST   /api/sync                        szinkron több eszköz között
+//   POST   /api/dri/foglalas                DRI munkalapszám lefoglalása egy munkalaphoz
 //
 // Az adatbázis szerkezete a db.js-ben van, a szerver indítása és beállításai az index.js-ben.
 // =============================================================================
@@ -43,6 +44,11 @@ const FILES = {
   alairasUgyfel: { file: 'alairas_ugyfel.png', column: 'has_alairas_ugyfel', type: 'image/png', magic: Buffer.from([0x89, 0x50, 0x4e, 0x47]) },
   alairasSzerviz: { file: 'alairas_szerviz.png', column: 'has_alairas_szerviz', type: 'image/png', magic: Buffer.from([0x89, 0x50, 0x4e, 0x47]) },
 };
+
+// A DRI szám formája: 7 jegyű, elöl nullákkal kiegészítve (2001 -> "0002001"), mint a papíros tömbökön.
+function formatDri(szam) {
+  return String(szam).padStart(7, '0');
+}
 
 // Munkalap azonosító: csak betű, szám, - és _ (így biztonságosan lehet belőle mappanevet csinálni a lemezen).
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,100}$/;
@@ -148,6 +154,13 @@ function createApp(db, options = {}) {
     history: db.prepare(`
       SELECT h.*, u.email AS updated_by_email, u.name AS updated_by_name FROM worksheet_history h
       JOIN users u ON u.id = h.updated_by WHERE h.worksheet_id = ? ORDER BY h.version DESC`),
+    // --- DRI munkalapszámok ---
+    foglalasByWs: db.prepare('SELECT * FROM dri_foglalasok WHERE worksheet_id = ?'),
+    // A számláló növelése és a régi érték visszaadása (ez lesz a kiosztott szám).
+    kovetkezoDri: db.prepare("UPDATE meta SET value = value + 1 WHERE key = 'dri_kovetkezo' RETURNING value - 1 AS szam"),
+    insertFoglalas: db.prepare(`
+      INSERT INTO dri_foglalasok(szam, worksheet_id, user_id, device_id, created_at)
+      VALUES (@szam, @worksheetId, @userId, @deviceId, @now)`),
     users: db.prepare(`
       SELECT u.id, u.email, u.name, u.created_at, u.last_seen,
         (SELECT COUNT(*) FROM worksheets w WHERE w.created_by = u.id AND w.deleted = 0) AS worksheet_count
@@ -243,6 +256,19 @@ function createApp(db, options = {}) {
     return uploaded;
   }
 
+  // DRI szám lefoglalása egy munkalaphoz. Ha a munkalapnak már van száma, azt adja vissza
+  // (így ugyanaz a munkalap soha nem kap két számot). Tranzakcióban fut, ezért ha egyszerre
+  // többen kérnek, a kérések sorban követik egymást, és mindenki más számot kap.
+  const driFoglalas = db.transaction((session, worksheetId) => {
+    const meglevo = stmt.foglalasByWs.get(worksheetId);
+    if (meglevo) return meglevo.szam;
+    const { szam } = stmt.kovetkezoDri.get();
+    stmt.insertFoglalas.run({
+      szam, worksheetId, userId: session.user_id, deviceId: session.device_id, now: now(),
+    });
+    return szam;
+  });
+
   // Egy munkalap mentése (új vagy meglévő). Ha a munkalapot közben más is módosította
   // (baseVersion < aktuális verzió), a mentés megtörténik, de "conflict: true" jelzéssel,
   // az előző változat pedig a history táblába kerül.
@@ -253,6 +279,21 @@ function createApp(db, options = {}) {
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
       throw new HttpError(400, 'A munkalap adatának ("data") JSON objektumnak kell lennie.');
     }
+    id = id || crypto.randomUUID(); // ha az app nem adott azonosítót, a szerver generál
+
+    // A DRI számot NEM az app küldi: mindig a szerver által kiosztott számot írjuk be,
+    // akármit is küldött az app (így nem lehet átírni és nem lehet kétszer ugyanaz).
+    const foglalas = stmt.foglalasByWs.get(id);
+    if (foglalas) {
+      data = { ...data, driSzam: formatDri(foglalas.szam) };
+    } else if (existing) {
+      // Régi (a számkiosztás előtti) munkalap: a meglévő száma marad, nem módosítható.
+      data = { ...data, driSzam: JSON.parse(existing.data).driSzam };
+    } else {
+      // Új munkalap foglalás nélkül (pl. a böngészőből): most kap számot.
+      data = { ...data, driSzam: formatDri(driFoglalas(session, id)) };
+    }
+
     const json = JSON.stringify(data);
     const del = deleted ? 1 : 0;
     const t = now();
@@ -267,7 +308,7 @@ function createApp(db, options = {}) {
 
     // A mentendő sor adatai.
     const params = {
-      id: id || crypto.randomUUID(), // ha az app nem adott azonosítót, a szerver generál
+      id,
       seq: stmt.nextSeq.get().value, // folyamatosan növekvő sorszám a szinkronhoz ("mi változott azóta")
       userId: session.user_id,
       deviceId: session.device_id,
@@ -576,6 +617,21 @@ function createApp(db, options = {}) {
     res.json({ results, items, cursor, hasMore });
   });
 
+  // DRI munkalapszám lefoglalása. Body: { worksheetId } – az app az új munkalap megnyitásakor kéri,
+  // hogy a szám már kitöltés közben látsszon (szerkeszteni nem lehet). Ugyanarra a munkalapra
+  // többször kérve mindig ugyanazt a számot adja.
+  api.post('/dri/foglalas', (req, res) => {
+    const worksheetId = req.body.worksheetId;
+    checkId(worksheetId);
+    const existing = stmt.wsById.get(worksheetId);
+    if (existing && !stmt.foglalasByWs.get(worksheetId)) {
+      // Régi munkalap, aminek még kézzel beírt száma van: azt adjuk vissza.
+      return res.json({ worksheetId, driSzam: JSON.parse(existing.data).driSzam || null });
+    }
+    const szam = driFoglalas(req.session, worksheetId);
+    res.json({ worksheetId, driSzam: formatDri(szam) });
+  });
+
   // Ismeretlen /api/... cím -> 404
   api.use((req, res) => res.status(404).json({ error: 'Nincs ilyen végpont.' }));
 
@@ -598,4 +654,4 @@ function createApp(db, options = {}) {
   return app;
 }
 
-module.exports = { createApp, extractSearchFields };
+module.exports = { createApp, extractSearchFields, formatDri };

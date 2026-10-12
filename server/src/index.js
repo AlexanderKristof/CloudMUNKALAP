@@ -37,7 +37,8 @@ if (process.env.SMTP_USER && process.env.SMTP_PASS) {
 }
 
 // Adatbázis megnyitása és a szerver létrehozása (app.js).
-const db = openDb(DB_FILE);
+// DRI_KEZDO: az első kiosztandó munkalapszám (csak az adatbázis első létrehozásakor számít).
+const db = openDb(DB_FILE, { driKezdo: Number(process.env.DRI_KEZDO) || 2001 });
 const app = createApp(db, {
   appKey: process.env.APP_KEY || null,
   bodyLimit: process.env.BODY_LIMIT || '25mb',

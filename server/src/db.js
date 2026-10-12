@@ -11,7 +11,8 @@
 //   sessions          – belépési tokenek (ki van éppen bejelentkezve)
 //   worksheets        – a munkalapok (egy sor = egy munkalap)
 //   worksheet_history – a munkalapok korábbi változatai (semmi nem vész el)
-//   meta              – belső számláló a szinkronhoz
+//   dri_foglalasok    – a kiosztott DRI munkalapszámok (melyik szám melyik munkalapé)
+//   meta              – belső számlálók: a szinkronhoz ('seq') és a következő DRI számhoz ('dri_kovetkezo')
 // A "CREATE TABLE IF NOT EXISTS" miatt az első indításkor létrejönnek, később nem nyúl hozzájuk.
 // =============================================================================
 
@@ -96,10 +97,22 @@ CREATE TABLE IF NOT EXISTS meta (
   value INTEGER NOT NULL
 );
 INSERT OR IGNORE INTO meta(key, value) VALUES ('seq', 0);
+
+-- DRI munkalapszámok. A számot mindig a szerver osztja ki (sorban, egyesével), így ha
+-- egyszerre többen kérnek számot, akkor sem kaphatja két munkalap ugyanazt.
+-- A "szam" az elsődleges kulcs, ezért az adatbázis is garantálja, hogy egy szám csak egyszer szerepel.
+CREATE TABLE IF NOT EXISTS dri_foglalasok (
+  szam          INTEGER PRIMARY KEY,
+  worksheet_id  TEXT NOT NULL UNIQUE,
+  user_id       INTEGER REFERENCES users(id),
+  device_id     TEXT,
+  created_at    INTEGER NOT NULL
+);
 `;
 
 // Az adatbázis megnyitása (ha még nincs, létrehozza a fájlt és a táblákat).
-function openDb(file) {
+// driKezdo: az első kiosztandó DRI szám (csak akkor számít, ha még nincs beállítva az adatbázisban).
+function openDb(file, { driKezdo = 2001 } = {}) {
   // A mappa létrehozása, ha még nincs (':memory:' = csak memóriában, a tesztekhez).
   if (file !== ':memory:') {
     fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
@@ -111,6 +124,9 @@ function openDb(file) {
   // Az SQLite beépített LOWER()/NOCASE csak ASCII betűkre működik, ez az ékezeteseket is kezeli.
   db.function('ulower', { deterministic: true }, (s) => (s === null ? null : String(s).toLocaleLowerCase('hu')));
   db.exec(SCHEMA); // táblák létrehozása, ha még nincsenek
+  // A DRI számláló kezdőértéke: a papíros tömbök utolsó száma 0002000 volt, ezért 2001-ről indul.
+  // Ha a számláló már létezik, nem írjuk felül (így újraindításkor sem kezdődik elölről).
+  db.prepare("INSERT OR IGNORE INTO meta(key, value) VALUES ('dri_kovetkezo', ?)").run(driKezdo);
   return db;
 }
 

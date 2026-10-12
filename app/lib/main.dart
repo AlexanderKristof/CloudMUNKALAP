@@ -8,6 +8,9 @@
 //   4. MunkalapFormScreen  – a munkalap kitöltő képernyő (űrlap, aláírások,
 //                            hangfelismerés, PDF készítés, beküldés a szerverre)
 //
+// A DRI munkalapszámot NEM a felhasználó írja be: a szerver osztja ki sorban
+// (0002001, 0002002, ...), az app csak megjeleníti, szerkeszteni nem lehet.
+//
 // A szerverrel való kommunikáció a munkalap_api.dart fájlban van,
 // a korábbi munkalapok listája és részletei a korabbi_munkalapok.dart-ban.
 // =============================================================================
@@ -177,8 +180,14 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
   /// Az űrlap kulcsa – ezzel lehet egyszerre ellenőrizni az összes mezőt (validate).
   final _formKey = GlobalKey<FormState>();
 
+  // --- DRI munkalapszám (a szerver osztja ki, nem szerkeszthető) ---
+  String? _driSzam; // pl. "0002001"; null, amíg nem sikerült lekérni (pl. nincs net)
+  bool _driToltes = false; // igaz, amíg a számot kérjük a szervertől
+  // Beküldték-e már ezt a munkalapot? Ha igen, az "Új munkalap" új számot kér;
+  // ha nem, a lefoglalt szám megmarad az új űrlapnak is (így nem vész el szám feleslegesen).
+  bool _bekuldve = false;
+
   // --- Az űrlap mezőinek tartalma (mindegyik mezőhöz egy "controller") ---
-  final TextEditingController _driSzamController = TextEditingController(); // munkalap száma (a "DRI-" utáni rész)
   final TextEditingController _ugyfelController = TextEditingController(); // ügyfél neve
   final TextEditingController _ugyfelEmailController = TextEditingController(); // ügyfél e-mail címe (e-mail küldéshez)
   final TextEditingController _helyszinController = TextEditingController(); // munkavégzés helye
@@ -225,12 +234,51 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
     _speech = stt.SpeechToText();
     // Ha korábban net nélkül készült munkalap, most megpróbáljuk felküldeni.
     MunkalapApi.instance.varolistaKuldes();
+    _aktualisMunkalapBetoltese();
+  }
+
+  // A félbehagyott (még be nem küldött) munkalap azonosítója és DRI száma a telefonon
+  // is el van mentve, hogy az app bezárása után is ugyanazt a számot kapja vissza.
+  static const _kulcsMunkalapId = 'aktualis_munkalap_id';
+  static const _kulcsDriSzam = 'aktualis_dri_szam';
+
+  /// Induláskor: ha van félbehagyott munkalap, annak az azonosítóját és számát használjuk,
+  /// különben az új azonosítóhoz kérünk számot a szervertől.
+  Future<void> _aktualisMunkalapBetoltese() async {
+    final p = await SharedPreferences.getInstance();
+    final mentettId = p.getString(_kulcsMunkalapId);
+    if (!mounted) return;
+    if (mentettId != null) {
+      setState(() {
+        _munkalapId = mentettId;
+        _driSzam = p.getString(_kulcsDriSzam);
+      });
+    }
+    if (_driSzam == null) await _driSzamLekerese();
+  }
+
+  /// DRI szám lefoglalása a szervertől az aktuális munkalaphoz, és elmentése a telefonra.
+  /// Ha nincs net, a szám üres marad; beküldéskor újra megpróbáljuk.
+  Future<void> _driSzamLekerese() async {
+    if (_driToltes) return;
+    setState(() => _driToltes = true);
+    try {
+      final szam = await MunkalapApi.instance.driFoglalas(_munkalapId);
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_kulcsMunkalapId, _munkalapId);
+      await p.setString(_kulcsDriSzam, szam);
+      if (mounted) setState(() => _driSzam = szam);
+    } catch (_) {
+      // nincs net / szerverhiba – a kijelzőn "nincs kapcsolat" látszik, újrapróbálható
+    } finally {
+      if (mounted) setState(() => _driToltes = false);
+    }
   }
 
   /// Az űrlap tartalma egy "térképben" (kulcs -> érték). Ez megy fel a szerverre.
   /// A kulcsneveket (driSzam, ugyfel...) a szerver is ismeri, ezek alapján keres.
   Map<String, dynamic> _adatok() => {
-        'driSzam': _driSzamController.text.trim(),
+        'driSzam': _driSzam, // a szerver úgyis a saját, lefoglalt számát írja be
         'ugyfel': _ugyfelController.text.trim(),
         'ugyfelEmail': _ugyfelEmailController.text.trim(),
         'helyszin': _helyszinController.text.trim(),
@@ -243,9 +291,10 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
       };
 
   // Űrlap ürítése egy új munkalaphoz ("Új munkalap" gomb).
-  void _ujMunkalap() {
+  // Ha az előző munkalapot beküldték, új azonosító és új DRI szám jár; ha nem küldték be,
+  // a már lefoglalt szám marad (így nem keletkezik kihagyott szám).
+  Future<void> _ujMunkalap() async {
     for (final c in [
-      _driSzamController,
       _ugyfelController,
       _ugyfelEmailController,
       _helyszinController,
@@ -260,16 +309,33 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
     _datumController.text = 'Miskolc, ${DateTime.now().year}.${DateTime.now().month}.${DateTime.now().day}.';
     _ugyfelSigController.clear();
     _szervizSigController.clear();
+    setState(() => _emailKuldes = false);
+    if (!_bekuldve) return; // a lefoglalt szám marad ennél az űrlapnál
+
+    final p = await SharedPreferences.getInstance();
+    await p.remove(_kulcsMunkalapId);
+    await p.remove(_kulcsDriSzam);
+    if (!mounted) return;
     setState(() {
       _munkalapId = MunkalapApi.ujAzonosito(); // új azonosító -> a szerveren új munkalap lesz
-      _emailKuldes = false;
+      _driSzam = null;
+      _bekuldve = false;
     });
+    await _driSzamLekerese();
   }
 
   // PDF generálás, mentés a szerverre (ha be van pipálva, a szerver e-mailben is elküldi az ügyfélnek),
   // majd a nyomtatási / megtekintési ablak.
   Future<void> _bekuldes() async {
     if (_kuldesFolyamatban || !_formKey.currentState!.validate()) return;
+    // DRI szám nélkül nem készülhet PDF: ha még nincs, most még egyszer megpróbáljuk lekérni.
+    if (_driSzam == null) await _driSzamLekerese();
+    if (_driSzam == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Nincs DRI munkalapszám, mert nem érhető el a szerver. Ellenőrizd az internetkapcsolatot, és próbáld újra.')));
+      return;
+    }
     setState(() => _kuldesFolyamatban = true);
     try {
       // 1. Aláírások PNG képként (null, ha üresen hagyták).
@@ -288,6 +354,8 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
         alairasSzerviz: szervizBytes,
         emailKuldes: _emailKuldes,
       );
+      // Beküldve (vagy a telefonon várakozik): az "Új munkalap" már új számot kér.
+      _bekuldve = true;
       if (!mounted) return;
       // Üzenet alul: "Munkalap mentve." / "Nincs kapcsolat..." stb.
       ScaffoldMessenger.of(context).showSnackBar(
@@ -421,7 +489,7 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
                 // A sablonon a "DRI-" felirat után (A4 = 595 x 842 pont)
                 left: 474,
                 top: 52,
-                child: pw.Text(_driSzamController.text, style: pw.TextStyle(font: ttfBold, fontSize: 11, fontWeight: pw.FontWeight.bold)),
+                child: pw.Text(_driSzam ?? '', style: pw.TextStyle(font: ttfBold, fontSize: 11, fontWeight: pw.FontWeight.bold)),
               ),
               // Ügyfél / Customer
               pw.Positioned(
@@ -517,7 +585,6 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
   /// A képernyő bezárásakor felszabadítjuk a mezőket (memória).
   @override
   void dispose() {
-    _driSzamController.dispose();
     _ugyfelController.dispose();
     _ugyfelEmailController.dispose();
     _helyszinController.dispose();
@@ -592,7 +659,9 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
                 context: context,
                 builder: (context) => AlertDialog(
                   title: const Text('Új munkalap'),
-                  content: const Text('Az űrlap kiürül. A már beküldött munkalap a szerveren megmarad.'),
+                  content: Text(_bekuldve
+                      ? 'Az űrlap kiürül, és az új munkalap új DRI számot kap. A beküldött munkalap a szerveren megmarad.'
+                      : 'Az űrlap kiürül. Ez a munkalap még nincs beküldve, ezért a DRI-$_driSzam szám megmarad az új űrlapnak.'),
                   actions: [
                     TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Mégse')),
                     ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Új munkalap')),
@@ -619,13 +688,37 @@ class _MunkalapFormScreenState extends State<MunkalapFormScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Munkalap száma: "DRI-" felirat + mező
-                Row(
-                  children: [
-                    const Text('DRI-', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    const SizedBox(width: 8),
-                    Expanded(child: _buildTextFieldWithMic(controller: _driSzamController, labelText: 'Munkalap száma')),
-                  ],
+                // Munkalap száma: csak kijelzés, a szerver osztja ki, nem szerkeszthető.
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[200],
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: Colors.grey),
+                  ),
+                  child: Row(
+                    children: [
+                      const Text('Munkalap száma: ', style: TextStyle(color: Colors.black54)),
+                      Text(
+                        _driSzam != null ? 'DRI-$_driSzam' : (_driToltes ? 'lekérés...' : 'nincs kapcsolat'),
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: _driSzam != null ? Colors.black : Colors.red,
+                        ),
+                      ),
+                      const Spacer(),
+                      // Ha nem sikerült lekérni (nincs net), itt újra lehet próbálni.
+                      if (_driSzam == null && !_driToltes)
+                        IconButton(
+                          icon: const Icon(Icons.refresh),
+                          tooltip: 'Újrapróbálás',
+                          onPressed: _driSzamLekerese,
+                        ),
+                      if (_driSzam != null) const Icon(Icons.lock, size: 18, color: Colors.black45),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 12),
                 _buildTextFieldWithMic(

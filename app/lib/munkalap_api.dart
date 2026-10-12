@@ -282,6 +282,19 @@ class MunkalapApi {
     }
   }
 
+  // --- DRI munkalapszám ----------------------------------------------------
+
+  /// DRI munkalapszám lefoglalása a megadott munkalaphoz (pl. "0002001").
+  /// A számot a szerver osztja ki, sorban; ha egyszerre többen kérnek, akkor is mindenki
+  /// különbözőt kap. Ugyanarra a munkalapra többször kérve mindig ugyanazt a számot adja.
+  /// Ha nincs net, kivételt dob.
+  Future<String> driFoglalas(String munkalapId) async {
+    final uri = Uri.parse('$kSzerverCim/api/dri/foglalas');
+    final body = _ellenoriz(await _kuld((h) => http.post(uri,
+        headers: {...h, 'Content-Type': 'application/json'}, body: jsonEncode({'worksheetId': munkalapId}))));
+    return body['driSzam'] as String;
+  }
+
   // --- Keresés, megtekintés --------------------------------------------------
 
   /// Korábbi munkalapok keresése. [q]: szabad szöveg (szám, ügyfél, gép, helyszín...),
