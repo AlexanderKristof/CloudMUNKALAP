@@ -32,6 +32,7 @@ const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
 const { munkalapPdf, ALAP_SABLON } = require('./pdf');
+const adminJelszo = require('./adminjelszo');
 
 // Az app által küldött munkalap mezők (a "data" JSON kulcsai), amiket a kereséshez külön oszlopba is kiírunk.
 const SEARCH_FIELDS = {
@@ -802,37 +803,29 @@ function createApp(db, options = {}) {
   // ADMIN FELÜLET (/api/admin/...)
   // ===========================================================================
   // Csak az ADMIN_EMAILS-ben (.env) felsorolt e-mail címekkel lehet belépni, saját jelszóval.
-  // Az első belépéskor az admin maga adja meg a jelszavát (ehhez az alkalmazáskulcs is kell),
-  // utána bármikor megváltoztathatja. Az admin belépés 12 óráig érvényes.
+  // A jelszót a VPS-en, konzolból kell beállítani (node src/admin-jelszo.js <email>) – a weben nem lehet,
+  // így aki csak az e-mail címet tudja, nem tud jelszót adni magának. Belépés után az admin
+  // a saját jelszavát megváltoztathatja. Az admin belépés 12 óráig érvényes.
   function adminRouter() {
     const r = express.Router();
     const ADMIN_ERVENYES = 12 * 3600 * 1000; // 12 óra
     const sikertelen = new Map(); // e-mail -> { db, eddig } – túl sok hibás jelszó esetén 15 percre letilt
 
     const st = {
-      jelszo: db.prepare('SELECT * FROM admin_jelszavak WHERE email = ?'),
-      jelszoMentes: db.prepare(`
-        INSERT INTO admin_jelszavak(email, hash, salt, updated_at) VALUES (@email, @hash, @salt, @now)
-        ON CONFLICT(email) DO UPDATE SET hash = @hash, salt = @salt, updated_at = @now`),
       sessionUj: db.prepare('INSERT INTO admin_sessions(token, email, created_at, expires_at) VALUES (?, ?, ?, ?)'),
       session: db.prepare('SELECT * FROM admin_sessions WHERE token = ? AND expires_at > ?'),
       sessionTorles: db.prepare('DELETE FROM admin_sessions WHERE token = ?'),
       lejartTorles: db.prepare('DELETE FROM admin_sessions WHERE expires_at <= ?'),
     };
 
-    // Jelszó titkosítása: scrypt + véletlen "só", így a jelszó maga sehol nincs eltárolva.
-    const hashel = (jelszo, salt) => crypto.scryptSync(String(jelszo), salt, 64).toString('hex');
-    const jelszoJo = (email, jelszo) => {
-      const sor = st.jelszo.get(email);
-      if (!sor) return false;
-      const a = Buffer.from(hashel(jelszo, sor.salt), 'hex');
-      const b = Buffer.from(sor.hash, 'hex');
-      return a.length === b.length && crypto.timingSafeEqual(a, b);
-    };
+    // Jelszó ellenőrzése / mentése (src/adminjelszo.js – ugyanazt használja a konzolos parancs is).
+    const jelszoJo = (email, jelszo) => adminJelszo.jelszoJo(db, email, jelszo);
     const jelszoBeallit = (email, jelszo) => {
-      if (typeof jelszo !== 'string' || jelszo.length < 8) throw new HttpError(400, 'A jelszó legalább 8 karakter legyen.');
-      const salt = crypto.randomBytes(16).toString('hex');
-      st.jelszoMentes.run({ email, hash: hashel(jelszo, salt), salt, now: now() });
+      try {
+        adminJelszo.jelszoMentes(db, email, jelszo, now());
+      } catch (err) {
+        throw new HttpError(400, err.message);
+      }
     };
     const ujSession = (email) => {
       const token = crypto.randomBytes(24).toString('base64url');
@@ -842,7 +835,8 @@ function createApp(db, options = {}) {
       return token;
     };
 
-    // Belépés: { email, jelszo }. Ha az adminnak még nincs jelszava: 409 + jelszoBeallitasKell.
+    // Belépés: { email, jelszo }. Ha az adminnak még nincs jelszava, ugyanúgy "hibás" a válasz
+    // (így kívülről nem derül ki, melyik cím admin és melyik nem).
     r.post('/belepes', (req, res) => {
       const email = normalizeEmail(req.body.email);
       const tilt = email && sikertelen.get(email);
@@ -850,7 +844,6 @@ function createApp(db, options = {}) {
         throw new HttpError(429, 'Túl sok sikertelen próbálkozás. Próbáld újra 15 perc múlva.');
       }
       if (!email || !adminEmails.includes(email)) throw new HttpError(401, 'Hibás e-mail cím vagy jelszó.');
-      if (!st.jelszo.get(email)) return res.status(409).json({ error: 'Még nincs jelszó beállítva.', jelszoBeallitasKell: true });
       if (!jelszoJo(email, req.body.jelszo)) {
         const x = sikertelen.get(email) || { db: 0, eddig: 0 };
         sikertelen.set(email, { db: x.db + 1, eddig: now() + 15 * 60 * 1000 });
@@ -859,17 +852,6 @@ function createApp(db, options = {}) {
       }
       sikertelen.delete(email);
       naplo('admin_belepes', { ki: email });
-      res.json({ token: ujSession(email), email });
-    });
-
-    // Első jelszó beállítása: { email, jelszo, appKey } – csak ha még nincs jelszava, és az alkalmazáskulcs is jó.
-    r.post('/elso-jelszo', (req, res) => {
-      const email = normalizeEmail(req.body.email);
-      if (!email || !adminEmails.includes(email)) throw new HttpError(401, 'Ez az e-mail cím nem admin.');
-      if (appKey && (req.get('x-app-key') || req.body.appKey) !== appKey) throw new HttpError(401, 'Hibás alkalmazáskulcs.');
-      if (st.jelszo.get(email)) throw new HttpError(409, 'Ennek az adminnak már van jelszava.');
-      jelszoBeallit(email, req.body.jelszo);
-      naplo('admin_jelszo', { ki: email, megjegyzes: 'Első jelszó beállítva' });
       res.json({ token: ujSession(email), email });
     });
 

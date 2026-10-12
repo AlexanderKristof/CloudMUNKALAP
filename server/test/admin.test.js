@@ -9,7 +9,9 @@ const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
 const { openDb } = require('../src/db');
+const { execFileSync } = require('child_process');
 const { createApp, kmErtek } = require('../src/app');
+const adminJelszo = require('../src/adminjelszo');
 
 // Kis fehér PNG a sablon helyett (a valódi sablon.png a szerveren van).
 function png(w, h) {
@@ -24,13 +26,14 @@ function png(w, h) {
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), ch('IHDR', ihdr), ch('IDAT', zlib.deflateSync(nyers)), ch('IEND', Buffer.alloc(0))]);
 }
 
-let server; let base; let dir;
+let server; let base; let dir; let db;
 let clock = new Date('2026-10-12T08:00:00').getTime();
 
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'munkalap-admin-'));
   fs.writeFileSync(path.join(dir, 'sablon.png'), png(60, 85));
-  const app = createApp(openDb(':memory:'), {
+  db = openDb(':memory:');
+  const app = createApp(db, {
     appKey: 'titok', filesDir: path.join(dir, 'files'), sablonFile: path.join(dir, 'sablon.png'),
     now: () => clock, adminEmails: ['Fonok@DRI.hu'],
   });
@@ -121,22 +124,23 @@ test('módosítás: új változat, régi megmarad, új PDF a szerveren, DRI szá
   assert.equal((await call('PUT', '/worksheets/m-1/modositas', { token: anna, body: { data: { km: '1' } } })).status, 400);
 });
 
-test('admin: első jelszó, belépés, hibás jelszó, jelszócsere, kilépés', async () => {
+test('admin: jelszó csak a szerveren, belépés, hibás jelszó, jelszócsere, kilépés', async () => {
   const anna = await login('anna@dri.hu');
   assert.equal((await call('GET', '/admin/attekintes', { token: anna })).status, 401, 'sima felhasználó nem admin');
 
   const nemAdmin = await call('POST', '/admin/belepes', { body: { email: 'anna@dri.hu', jelszo: 'barmi12345' } });
   assert.equal(nemAdmin.status, 401);
-  const elso = await call('POST', '/admin/belepes', { body: { email: 'fonok@dri.hu', jelszo: 'x' } });
-  assert.equal(elso.status, 409);
-  assert.equal(elso.body.jelszoBeallitasKell, true);
+  // Jelszó nélkül nem lehet belépni, és a weben jelszót sem lehet adni (alkalmazáskulccsal sem)
+  const nincsJelszo = await call('POST', '/admin/belepes', { body: { email: 'fonok@dri.hu', jelszo: 'barmi12345' } });
+  assert.equal(nincsJelszo.status, 401);
+  assert.equal(nincsJelszo.body.error, nemAdmin.body.error, 'kívülről nem derül ki, ki admin');
+  const web = await call('POST', '/admin/elso-jelszo', { body: { email: 'fonok@dri.hu', jelszo: 'Jelszo1234', appKey: 'titok' } });
+  assert.notEqual(web.status, 200);
+  assert.equal((await call('POST', '/admin/belepes', { body: { email: 'fonok@dri.hu', jelszo: 'Jelszo1234' } })).status, 401);
 
-  assert.equal((await call('POST', '/admin/elso-jelszo', { body: { email: 'fonok@dri.hu', jelszo: 'Jelszo1234' } })).status, 401, 'alkalmazáskulcs nélkül nem');
-  assert.equal((await call('POST', '/admin/elso-jelszo', { body: { email: 'fonok@dri.hu', jelszo: 'rovid', appKey: 'titok' } })).status, 400);
-  const beall = await call('POST', '/admin/elso-jelszo', { body: { email: 'FONOK@dri.hu', jelszo: 'Jelszo1234', appKey: 'titok' } });
-  assert.equal(beall.status, 200);
-  assert.ok(beall.body.token);
-  assert.equal((await call('POST', '/admin/elso-jelszo', { body: { email: 'fonok@dri.hu', jelszo: 'Masik12345', appKey: 'titok' } })).status, 409, 'második első jelszó nem lehet');
+  // A jelszót a szerveren állítják be (ezt csinálja a konzolos parancs is)
+  assert.throws(() => adminJelszo.jelszoMentes(db, 'fonok@dri.hu', 'rovid'));
+  adminJelszo.jelszoMentes(db, 'fonok@dri.hu', 'Jelszo1234');
 
   assert.equal((await call('POST', '/admin/belepes', { body: { email: 'fonok@dri.hu', jelszo: 'rossz-jelszo' } })).status, 401);
   const be = await call('POST', '/admin/belepes', { body: { email: 'fonok@dri.hu', jelszo: 'Jelszo1234' } });
@@ -218,4 +222,41 @@ test('admin: statisztika, áttekintés, napló, visszaállítás, felhasználók
   const sorok = csv.body.toString('utf8').replace(/^﻿/, '').split('\r\n');
   assert.equal(sorok.length, 5, 'fejléc + 4 munkalap');
   assert.match(sorok[0], /^DRI szám;Rögzítve;Rögzítette/);
+});
+
+test('konzolos parancs: admin jelszó beállítása a VPS-en', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'munkalap-cli-'));
+  try {
+    const dbFile = path.join(d, 'munkalap.db');
+    openDb(dbFile).close();
+    fs.writeFileSync(path.join(d, '.env'), 'APP_KEY=x\r\nADMIN_EMAILS=fonok@dri.hu, iroda@dri.hu\r\n');
+    const futtat = (email) => {
+      try {
+        return { kod: 0, ki: execFileSync(process.execPath, [path.join(__dirname, '..', 'src', 'admin-jelszo.js'), email],
+          { env: { ...process.env, ENV_FILE: path.join(d, '.env'), DB_FILE: dbFile, ADMIN_EMAILS: '' }, encoding: 'utf8' }) };
+      } catch (err) {
+        return { kod: err.status, ki: err.stdout };
+      }
+    };
+    // Nem admin cím: nem állít be semmit
+    assert.equal(futtat('valaki@dri.hu').kod, 1);
+    // Admin cím: ideiglenes jelszót ad, ami működik
+    const r = futtat('Iroda@DRI.hu');
+    assert.equal(r.kod, 0, r.ki);
+    const jelszo = /Ideiglenes jelszó: (\S+)/.exec(r.ki)[1];
+    assert.ok(jelszo.length >= 8);
+    const d2 = openDb(dbFile);
+    assert.ok(adminJelszo.jelszoJo(d2, 'iroda@dri.hu', jelszo));
+    assert.ok(!adminJelszo.jelszoJo(d2, 'iroda@dri.hu', 'rossz'));
+    assert.equal(d2.prepare("SELECT COUNT(*) AS n FROM naplo WHERE tipus = 'admin_jelszo'").get().n, 1);
+    d2.close();
+    // Újrafuttatva új jelszó, a régi már nem jó
+    const r2 = futtat('iroda@dri.hu');
+    const d3 = openDb(dbFile);
+    assert.ok(!adminJelszo.jelszoJo(d3, 'iroda@dri.hu', jelszo));
+    assert.ok(adminJelszo.jelszoJo(d3, 'iroda@dri.hu', /Ideiglenes jelszó: (\S+)/.exec(r2.ki)[1]));
+    d3.close();
+  } finally {
+    fs.rmSync(d, { recursive: true, force: true });
+  }
 });

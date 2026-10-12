@@ -38,8 +38,14 @@ küld be munkalapot, a szerver egy helyen tárolja őket, és kereshetővé tesz
 A böngészős felület jobb felső sarkában az **Admin** link, vagy közvetlenül: `https://munkalap.drindustrie.hu/admin.html`
 
 - Csak az `ADMIN_EMAILS` beállításban felsorolt e-mail címekkel lehet belépni (lásd lent).
-- **Első belépés:** az e-mail cím beírása után a felület jelszó beállítását kéri (legalább 8 karakter).
-  Ehhez egyszer meg kell adni az alkalmazáskulcsot (`APP_KEY`) is, hogy idegen ne állíthasson be jelszót.
+- **Jelszót csak a VPS-en lehet adni**, konzolból (első jelszó, vagy ha valaki elfelejtette). A weben ez nem
+  lehetséges, így aki csak az e-mail címet tudja, nem tud jelszót beállítani magának:
+  ```bash
+  cd /opt/munkalap/server && node src/admin-jelszo.js valaki@drindustrie.hu
+  ```
+  A parancs kiír egy ideiglenes jelszót. Ezzel lehet belépni, és a „Jelszó” fülön érdemes rögtön sajátra
+  cserélni. Újrafuttatva új jelszót ad; a régi jelszó és az addigi admin belépések érvényüket vesztik.
+  Az e-mail címnek benne kell lennie az `ADMIN_EMAILS` beállításban.
 - A jelszó a „Jelszó” fülön módosítható. 10 hibás próbálkozás után 15 percig nem lehet belépni.
 - A belépés 12 óráig érvényes.
 
@@ -71,6 +77,7 @@ server/                     Node.js + Express + SQLite szerver
   src/app.js                API végpontok (admin végpontok is)
   src/db.js                 adatbázis-séma
   src/pdf.js                a módosított munkalapok PDF-je
+  src/admin-jelszo.js       admin jelszó beállítása konzolból
   assets/sablon.png         a PDF háttere (ide kell feltölteni, lásd lent)
   fonts/                    Roboto betűtípus a PDF-hez
   public/index.html         böngészős kereső felület
@@ -231,7 +238,7 @@ Minden végpont `/api` alatt van. Belépés után a tokent `Authorization: Beare
 | `PUT /api/worksheets/:id/modositas` `{ data }` | Munkalap módosítása (új PDF készül, a régi változat megmarad) |
 | `GET /api/worksheets/:id/valtozatok` | Az eredeti és a módosított változatok |
 | `GET /api/worksheets/:id/valtozatok/:n/pdf` | Egy változat PDF-je (0 = eredeti) |
-| `/api/admin/...` | Admin végpontok: `belepes`, `elso-jelszo`, `jelszo`, `attekintes`, `statisztika`, `naplo`, `torolt`, `visszaallitas/:id`, `felhasznalok`, `export.csv` |
+| `/api/admin/...` | Admin végpontok: `belepes`, `jelszo`, `attekintes`, `statisztika`, `naplo`, `torolt`, `visszaallitas/:id`, `felhasznalok`, `export.csv` |
 | `POST /api/sync` | Szinkron több eszköz között (változások lekérése egy kurzor óta) |
 
 A munkalap adatai (`data`) az app mezőnevei szerint: `driSzam`, `ugyfel`, `ugyfelEmail`, `helyszin`, `gep`,

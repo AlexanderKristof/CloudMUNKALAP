@@ -5,7 +5,8 @@
   A VPS-en itt van: /opt/munkalap/server/public/admin.html
 
   Belépni csak az ADMIN_EMAILS-ben (/opt/munkalap/.env) megadott e-mail címekkel lehet, saját jelszóval.
-  Első belépéskor az admin maga állítja be a jelszavát (ehhez az alkalmazáskulcs is kell).
+  A jelszót a VPS-en kell beállítani (cd /opt/munkalap/server && node src/admin-jelszo.js <email>),
+  belépés után a "Jelszó" fülön sajátra cserélhető.
 
   Részek (fülek):
     Áttekintés          – darabszámok, napi munkalapszám, felhasználónkénti összesítés
@@ -91,22 +92,11 @@
     <h2>Admin belépés</h2>
     <label for="lEmail">E-mail cím</label>
     <input id="lEmail" type="email" autocomplete="username" required>
-    <div id="jelszoSor">
-      <label for="lJelszo">Jelszó</label>
-      <input id="lJelszo" type="password" autocomplete="current-password">
-    </div>
-    <!-- Első belépéskor: jelszó beállítása -->
-    <div id="elsoJelszo" class="hidden">
-      <p class="muted">Ehhez az admin fiókhoz még nincs jelszó. Add meg a saját jelszavadat (legalább 8 karakter) és az alkalmazáskulcsot.</p>
-      <label for="eJelszo1">Új jelszó</label>
-      <input id="eJelszo1" type="password" autocomplete="new-password">
-      <label for="eJelszo2">Új jelszó még egyszer</label>
-      <input id="eJelszo2" type="password" autocomplete="new-password">
-      <label for="eKulcs">Alkalmazáskulcs</label>
-      <input id="eKulcs" type="password">
-    </div>
+    <label for="lJelszo">Jelszó</label>
+    <input id="lJelszo" type="password" autocomplete="current-password" required>
     <button type="submit" id="loginBtn">Belépés</button>
     <p id="loginErr" class="err"></p>
+    <p class="muted">Nincs még jelszavad, vagy elfelejtetted? A jelszót a rendszergazda állítja be a szerveren.</p>
   </form>
 
   <!-- ADMIN FELÜLET -->
@@ -248,7 +238,7 @@ async function api(path, opts = {}) {
     headers: { 'content-type': 'application/json', ...(token ? { authorization: 'Bearer ' + token } : {}) },
   });
   const body = await res.json().catch(() => ({}));
-  if (res.status === 401 && !['/belepes', '/elso-jelszo'].includes(path)) { kijelentkeztet(); throw new Error(body.error || 'Lejárt a belépés.'); }
+  if (res.status === 401 && !path === '/belepes') { kijelentkeztet(); throw new Error(body.error || 'Lejárt a belépés.'); }
   if (!res.ok) { const e = new Error(body.error || 'Hiba'); e.status = res.status; e.body = body; throw e; }
   return body;
 }
@@ -262,18 +252,9 @@ const idoszakParam = () => {
 };
 
 // --- Belépés ---
-// A belépő űrlap visszaállítása a sima (e-mail + jelszó) módba.
-function urlapAlaphelyzet() {
-  $('elsoJelszo').classList.add('hidden'); $('jelszoSor').classList.remove('hidden');
-  $('loginBtn').textContent = 'Belépés';
-  ['lJelszo', 'eJelszo1', 'eJelszo2', 'eKulcs'].forEach((id) => { $(id).value = ''; });
-}
-// Ha másik e-mail címet írnak be, újra a sima belépés jön.
-$('lEmail').addEventListener('input', () => { if (!$('elsoJelszo').classList.contains('hidden')) urlapAlaphelyzet(); });
-
 function kijelentkeztet() {
   token = null; store.set('munkalap_admin_token', null);
-  urlapAlaphelyzet();
+  $('lJelszo').value = '';
   $('adminView').classList.add('hidden'); $('adminWho').classList.add('hidden'); $('loginCard').classList.remove('hidden');
 }
 async function belepve() {
@@ -287,22 +268,10 @@ $('loginCard').addEventListener('submit', async (e) => {
   $('loginErr').textContent = '';
   const email = $('lEmail').value.trim();
   try {
-    let r;
-    if (!$('elsoJelszo').classList.contains('hidden')) {
-      if ($('eJelszo1').value !== $('eJelszo2').value) throw new Error('A két jelszó nem egyezik.');
-      r = await api('/elso-jelszo', { method: 'POST', body: JSON.stringify({ email, jelszo: $('eJelszo1').value, appKey: $('eKulcs').value }) });
-    } else {
-      r = await api('/belepes', { method: 'POST', body: JSON.stringify({ email, jelszo: $('lJelszo').value }) });
-    }
+    const r = await api('/belepes', { method: 'POST', body: JSON.stringify({ email, jelszo: $('lJelszo').value }) });
     token = r.token; store.set('munkalap_admin_token', token);
     await belepve();
   } catch (err) {
-    if (err.body && err.body.jelszoBeallitasKell) {
-      // Első belépés: jelszó beállítása
-      $('elsoJelszo').classList.remove('hidden'); $('jelszoSor').classList.add('hidden');
-      $('loginBtn').textContent = 'Jelszó beállítása és belépés';
-      return;
-    }
     $('loginErr').textContent = err.message;
   }
 });
