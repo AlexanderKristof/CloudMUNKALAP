@@ -18,6 +18,10 @@
 //   DELETE /api/worksheets/:id              törlés (csak megjelölés)
 //   POST   /api/sync                        szinkron több eszköz között
 //   POST   /api/dri/foglalas                DRI munkalapszám lefoglalása egy munkalaphoz
+//   PUT    /api/worksheets/:id/modositas    munkalap módosítása (új PDF készül, piros "Módosítás dátuma")
+//   GET    /api/worksheets/:id/valtozatok   az eredeti és a módosított változatok listája
+//   GET    /api/worksheets/:id/valtozatok/:n/pdf  egy változat PDF-je (0 = eredeti)
+//   /api/admin/...                          admin felület (külön jelszóval) – lásd lent
 //
 // Az adatbázis szerkezete a db.js-ben van, a szerver indítása és beállításai az index.js-ben.
 // =============================================================================
@@ -27,6 +31,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
+const { munkalapPdf, ALAP_SABLON } = require('./pdf');
 
 // Az app által küldött munkalap mezők (a "data" JSON kulcsai), amiket a kereséshez külön oszlopba is kiírunk.
 const SEARCH_FIELDS = {
@@ -48,6 +53,29 @@ const FILES = {
 // A DRI szám formája: 7 jegyű, elöl nullákkal kiegészítve (2001 -> "0002001"), mint a papíros tömbökön.
 function formatDri(szam) {
   return String(szam).padStart(7, '0');
+}
+
+// A munkalap mezői, amiket módosítani lehet (a DRI szám és az aláírások nem módosíthatók).
+const MODOSITHATO_MEZOK = ['ugyfel', 'ugyfelEmail', 'helyszin', 'gep', 'idotartam', 'km', 'elvegzettMunka', 'hibaLeiras', 'datum'];
+
+// Két munkalap-változat összehasonlítása: melyik mező változott, mi volt előtte és mi lett utána.
+function kulonbsegek(elotte, utana) {
+  const kulcsok = new Set([...Object.keys(elotte || {}), ...Object.keys(utana || {})]);
+  const lista = [];
+  for (const k of kulcsok) {
+    const a = elotte && elotte[k] !== undefined && elotte[k] !== null ? String(elotte[k]) : '';
+    const b = utana && utana[k] !== undefined && utana[k] !== null ? String(utana[k]) : '';
+    if (a !== b) lista.push({ mezo: k, elotte: a, utana: b });
+  }
+  return lista;
+}
+
+// A "Megtett km" mező szabad szöveg (pl. "25", "10km", "12,5 km"): az első számot vesszük ki belőle.
+// Ha nincs benne szám, null (a statisztikában "nem értelmezhető" lesz).
+function kmErtek(szoveg) {
+  if (szoveg === undefined || szoveg === null) return null;
+  const m = String(szoveg).replace(',', '.').match(/\d+(?:\.\d+)?/);
+  return m ? parseFloat(m[0]) : null;
 }
 
 // Munkalap azonosító: csak betű, szám, - és _ (így biztonságosan lehet belőle mappanevet csinálni a lemezen).
@@ -109,9 +137,12 @@ class HttpError extends Error {
 function createApp(db, options = {}) {
   const appKey = options.appKey || null; // közös alkalmazáskulcs (APP_KEY), null = nincs védelem
   const now = options.now || (() => Date.now()); // aktuális idő (a tesztekben "megállítható")
-  const filesDir = options.filesDir || path.join(process.cwd(), 'data', 'files');
+  const filesDir = path.resolve(options.filesDir || path.join(process.cwd(), 'data', 'files'));
   const sendMail = options.sendMail || null; // async (message) => {}, nodemailer kompatibilis üzenettel
   const mailFrom = options.mailFrom || null; // feladó, pl. "DR Industrie Szerviz" <szerviz@...>
+  const sablonFile = options.sablonFile || ALAP_SABLON; // a nyomtatvány háttérképe a szerveren készülő PDF-ekhez
+  // Az adminok e-mail címei (ADMIN_EMAILS a .env-ben, vesszővel elválasztva).
+  const adminEmails = (options.adminEmails || []).map(normalizeEmail).filter(Boolean);
 
   // Előre elkészített SQL lekérdezések (gyorsabb és biztonságos: a paraméterek nem keveredhetnek az SQL-be).
   const stmt = {
@@ -154,6 +185,11 @@ function createApp(db, options = {}) {
     history: db.prepare(`
       SELECT h.*, u.email AS updated_by_email, u.name AS updated_by_name FROM worksheet_history h
       JOIN users u ON u.id = h.updated_by WHERE h.worksheet_id = ? ORDER BY h.version DESC`),
+    // --- Napló ---
+    insertNaplo: db.prepare(`
+      INSERT INTO naplo(ts, tipus, worksheet_id, ki, elotte, utana, elotte_pdf, megjegyzes)
+      VALUES (@ts, @tipus, @worksheetId, @ki, @elotte, @utana, @elottePdf, @megjegyzes)`),
+    modositasokByWs: db.prepare("SELECT * FROM naplo WHERE worksheet_id = ? AND tipus = 'modositas' ORDER BY id"),
     // --- DRI munkalapszámok ---
     foglalasByWs: db.prepare('SELECT * FROM dri_foglalasok WHERE worksheet_id = ?'),
     // A számláló növelése és a régi érték visszaadása (ez lesz a kiosztott szám).
@@ -170,7 +206,8 @@ function createApp(db, options = {}) {
   // Munkalap lekérdezés a felhasználók nevével / e-mailjével és az eszköz nevével együtt.
   const SELECT_WS = `
     SELECT w.*, cu.email AS created_by_email, cu.name AS created_by_name,
-      uu.email AS updated_by_email, uu.name AS updated_by_name, d.name AS device_name
+      uu.email AS updated_by_email, uu.name AS updated_by_name, d.name AS device_name,
+      (SELECT COUNT(*) FROM naplo n WHERE n.worksheet_id = w.id AND n.tipus = 'modositas') AS mod_db
     FROM worksheets w
     JOIN users cu ON cu.id = w.created_by
     JOIN users uu ON uu.id = w.updated_by
@@ -195,6 +232,7 @@ function createApp(db, options = {}) {
       gep: row.gep,
       datum: row.datum_szoveg,
       deleted: !!row.deleted,
+      modositasokSzama: row.mod_db || 0, // hányszor módosították (0 = eredeti)
       files: {
         pdf: !!row.has_pdf,
         alairasUgyfel: !!row.has_alairas_ugyfel,
@@ -269,6 +307,11 @@ function createApp(db, options = {}) {
     return szam;
   });
 
+  // Bejegyzés a naplóba.
+  function naplo(tipus, { worksheetId = null, ki = null, elotte = null, utana = null, elottePdf = null, megjegyzes = null } = {}) {
+    stmt.insertNaplo.run({ ts: now(), tipus, worksheetId, ki, elotte, utana, elottePdf, megjegyzes });
+  }
+
   // Egy munkalap mentése (új vagy meglévő). Ha a munkalapot közben más is módosította
   // (baseVersion < aktuális verzió), a mentés megtörténik, de "conflict: true" jelzéssel,
   // az előző változat pedig a history táblába kerül.
@@ -322,16 +365,105 @@ function createApp(db, options = {}) {
     // Új munkalap -> beszúrás.
     if (!existing) {
       stmt.insertWs.run(params);
+      naplo('letrehozas', { worksheetId: params.id, ki: session.user_email, utana: json });
       return { id: params.id, version: 1, seq: params.seq, status: 'created', conflict: false };
     }
 
     // Meglévő munkalap -> a régi változatot előbb elmentjük az előzményekbe, aztán felülírjuk.
+    const adatValtozott = existing.data !== json;
+    let elottePdf = null;
+    if (adatValtozott) {
+      // A módosítás előtti PDF megmarad más néven (munkalap_v<verzió>.pdf), hogy később is megnézhető legyen.
+      const regi = path.join(filesDir, id, FILES.pdf.file);
+      if (fs.existsSync(regi)) {
+        elottePdf = `munkalap_v${existing.version}.pdf`;
+        fs.renameSync(regi, path.join(filesDir, id, elottePdf));
+      }
+    }
     stmt.archiveWs.run({ ...existing, archivedAt: t });
     stmt.updateWs.run(params);
+    if (adatValtozott) {
+      naplo('modositas', { worksheetId: id, ki: session.user_email, elotte: existing.data, utana: json, elottePdf });
+    } else if (del && !existing.deleted) {
+      naplo('torles', { worksheetId: id, ki: session.user_email, elotte: existing.data });
+    } else if (!del && existing.deleted) {
+      naplo('visszaallitas', { worksheetId: id, ki: session.user_email, utana: json });
+    }
     const conflict = baseVersion !== null && baseVersion !== undefined && baseVersion !== ''
       && Number(baseVersion) < existing.version;
-    return { id: existing.id, version: existing.version + 1, seq: params.seq, status: 'updated', conflict };
+    return { id: existing.id, version: existing.version + 1, seq: params.seq, status: 'updated', conflict, adatValtozott };
   });
+
+  // Módosított munkalap PDF-jének elkészítése a szerveren (a régi aláírásokkal és a piros
+  // "Módosítás dátuma" felirattal). Ha nem sikerül (pl. hiányzik a sablon.png), a hibát naplózza,
+  // és az app által feltöltött PDF marad (ha volt).
+  async function modositottPdf(id) {
+    const row = stmt.wsById.get(id);
+    const dir = path.join(filesDir, id);
+    const olvas = (f) => (fs.existsSync(path.join(dir, f)) ? fs.readFileSync(path.join(dir, f)) : null);
+    try {
+      const pdf = await munkalapPdf(JSON.parse(row.data), {
+        alairasUgyfel: row.has_alairas_ugyfel ? olvas(FILES.alairasUgyfel.file) : null,
+        alairasSzerviz: row.has_alairas_szerviz ? olvas(FILES.alairasSzerviz.file) : null,
+        modositva: row.updated_at,
+        sablonFile,
+      });
+      writeFiles(id, { pdf });
+      stmt.updateFileFlags.run({ id, has_pdf: 1, has_alairas_ugyfel: row.has_alairas_ugyfel, has_alairas_szerviz: row.has_alairas_szerviz });
+      return true;
+    } catch (err) {
+      console.error('Módosított PDF készítési hiba:', err.message);
+      const vanPdf = fs.existsSync(path.join(dir, FILES.pdf.file)) ? 1 : 0;
+      stmt.updateFileFlags.run({ id, has_pdf: vanPdf, has_alairas_ugyfel: row.has_alairas_ugyfel, has_alairas_szerviz: row.has_alairas_szerviz });
+      return false;
+    }
+  }
+
+  // Egy munkalap változatainak listája: az eredeti és minden módosítás, időrendben.
+  // Mindegyiknél: ki és mikor, a teljes tartalom, mi változott az előzőhöz képest, és melyik PDF tartozik hozzá.
+  function valtozatok(row) {
+    const mods = stmt.modositasokByWs.all(row.id);
+    const lista = [];
+    const eredetiAdat = mods.length ? mods[0].elotte : row.data;
+    lista.push({
+      sorszam: 0,
+      cim: 'Eredeti',
+      ts: iso(row.created_at),
+      ki: row.created_by_email || null,
+      data: JSON.parse(eredetiAdat),
+      pdfFajl: mods.length ? mods[0].elotte_pdf : (row.has_pdf ? FILES.pdf.file : null),
+    });
+    mods.forEach((m, i) => {
+      lista.push({
+        sorszam: i + 1,
+        cim: `${i + 1}. módosítás`,
+        ts: iso(m.ts),
+        ki: m.ki,
+        data: JSON.parse(m.utana),
+        pdfFajl: i + 1 < mods.length ? mods[i + 1].elotte_pdf : (row.has_pdf ? FILES.pdf.file : null),
+      });
+    });
+    return lista.map((v, i) => ({
+      sorszam: v.sorszam,
+      cim: v.cim,
+      ts: v.ts,
+      ki: v.ki,
+      data: v.data,
+      pdf: !!(v.pdfFajl && fs.existsSync(path.join(filesDir, row.id, v.pdfFajl))),
+      _pdfFajl: v.pdfFajl,
+      valtozasok: i === 0 ? [] : kulonbsegek(lista[i - 1].data, v.data),
+    }));
+  }
+
+  // Egy változat PDF-jének elküldése a böngészőnek / appnak.
+  function valtozatPdfKuldes(res, row, n) {
+    const v = valtozatok(row).find((x) => x.sorszam === Number(n));
+    if (!v || !v.pdf) throw new HttpError(404, 'Ehhez a változathoz nincs PDF.');
+    const nev = `Munkalap_DRI_${row.munkalapszam || row.id}${v.sorszam ? `_modositas_${v.sorszam}` : ''}.pdf`;
+    res.type('application/pdf');
+    res.set('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(nev)}`);
+    res.sendFile(path.join(filesDir, row.id, v._pdfFajl));
+  }
 
   // A munkalap PDF-jének elküldése e-mailben az ügyfélnek (vagy a megadott címre), másolatban a felhasználónak.
   // Az eredmény { status: 'kuldve' | 'hiba' | ..., error, to }, és az állapot az adatbázisba is bekerül.
@@ -364,6 +496,7 @@ function createApp(db, options = {}) {
           contentType: 'application/pdf',
         }],
       });
+      naplo('email', { worksheetId: id, ki: session.user_email, megjegyzes: `Elküldve: ${cimzett}` });
       return setStatus('kuldve', null);
     } catch (err) {
       console.error('E-mail küldési hiba:', err.message);
@@ -561,6 +694,10 @@ function createApp(db, options = {}) {
       return saved;
     })();
 
+    // Ha egy meglévő munkalap tartalma változott, a szerver készíti el az új PDF-et
+    // (piros "Módosítás dátuma" felirattal), az app által küldött helyett.
+    if (r.status === 'updated' && r.adatValtozott) await modositottPdf(r.id);
+
     // E-mail küldés, ha kérték. Ha már egyszer sikeresen kiment, nem küldjük újra
     // (pl. ha az app a megszakadt net miatt újraküldte a munkalapot).
     let email = null;
@@ -584,6 +721,32 @@ function createApp(db, options = {}) {
     const result = await emailWorksheet(req.params.id, req.session, req.body.to);
     res.status(result.status === 'kuldve' ? 200 : 422).json({ ...result, item: serialize(wsFullById.get(req.params.id)) });
   });
+
+  // Munkalap módosítása (webes felület és app). Body: { data: { ugyfel, helyszin, km, ... } }
+  // Csak a MODOSITHATO_MEZOK változhatnak; a DRI szám és az aláírások maradnak.
+  // A régi változat és a régi PDF megmarad, az új PDF-et a szerver készíti el.
+  api.put('/worksheets/:id/modositas', async (req, res) => {
+    const row = getRow(req.params.id);
+    if (row.deleted) throw new HttpError(400, 'Törölt munkalapot nem lehet módosítani.');
+    const uj = req.body.data;
+    if (!uj || typeof uj !== 'object' || Array.isArray(uj)) throw new HttpError(400, 'Hiányzik a módosított adat ("data").');
+    const data = JSON.parse(row.data);
+    for (const k of MODOSITHATO_MEZOK) {
+      if (uj[k] !== undefined) data[k] = uj[k] === null ? '' : String(uj[k]).slice(0, 5000);
+    }
+    const r = saveWorksheet(req.session, { id: row.id, data, baseVersion: req.body.baseVersion });
+    if (r.status === 'updated' && r.adatValtozott) await modositottPdf(row.id);
+    res.json({ ...r, item: serialize(wsFullById.get(row.id)) });
+  });
+
+  // Az eredeti és a módosított változatok listája (a PDF-ek a következő végponton érhetők el).
+  api.get('/worksheets/:id/valtozatok', (req, res) => {
+    const row = getRow(req.params.id);
+    res.json(valtozatok(row).map(({ _pdfFajl, ...v }) => v));
+  });
+
+  // Egy változat PDF-je. n = 0 az eredeti, 1 az első módosítás, ...
+  api.get('/worksheets/:id/valtozatok/:n/pdf', (req, res) => valtozatPdfKuldes(res, getRow(req.params.id), req.params.n));
 
   // Törlés: csak megjelöljük, az adat és a fájlok megmaradnak.
   api.delete('/worksheets/:id', (req, res) => {
@@ -635,6 +798,284 @@ function createApp(db, options = {}) {
   // Ismeretlen /api/... cím -> 404
   api.use((req, res) => res.status(404).json({ error: 'Nincs ilyen végpont.' }));
 
+  // ===========================================================================
+  // ADMIN FELÜLET (/api/admin/...)
+  // ===========================================================================
+  // Csak az ADMIN_EMAILS-ben (.env) felsorolt e-mail címekkel lehet belépni, saját jelszóval.
+  // Az első belépéskor az admin maga adja meg a jelszavát (ehhez az alkalmazáskulcs is kell),
+  // utána bármikor megváltoztathatja. Az admin belépés 12 óráig érvényes.
+  function adminRouter() {
+    const r = express.Router();
+    const ADMIN_ERVENYES = 12 * 3600 * 1000; // 12 óra
+    const sikertelen = new Map(); // e-mail -> { db, eddig } – túl sok hibás jelszó esetén 15 percre letilt
+
+    const st = {
+      jelszo: db.prepare('SELECT * FROM admin_jelszavak WHERE email = ?'),
+      jelszoMentes: db.prepare(`
+        INSERT INTO admin_jelszavak(email, hash, salt, updated_at) VALUES (@email, @hash, @salt, @now)
+        ON CONFLICT(email) DO UPDATE SET hash = @hash, salt = @salt, updated_at = @now`),
+      sessionUj: db.prepare('INSERT INTO admin_sessions(token, email, created_at, expires_at) VALUES (?, ?, ?, ?)'),
+      session: db.prepare('SELECT * FROM admin_sessions WHERE token = ? AND expires_at > ?'),
+      sessionTorles: db.prepare('DELETE FROM admin_sessions WHERE token = ?'),
+      lejartTorles: db.prepare('DELETE FROM admin_sessions WHERE expires_at <= ?'),
+    };
+
+    // Jelszó titkosítása: scrypt + véletlen "só", így a jelszó maga sehol nincs eltárolva.
+    const hashel = (jelszo, salt) => crypto.scryptSync(String(jelszo), salt, 64).toString('hex');
+    const jelszoJo = (email, jelszo) => {
+      const sor = st.jelszo.get(email);
+      if (!sor) return false;
+      const a = Buffer.from(hashel(jelszo, sor.salt), 'hex');
+      const b = Buffer.from(sor.hash, 'hex');
+      return a.length === b.length && crypto.timingSafeEqual(a, b);
+    };
+    const jelszoBeallit = (email, jelszo) => {
+      if (typeof jelszo !== 'string' || jelszo.length < 8) throw new HttpError(400, 'A jelszó legalább 8 karakter legyen.');
+      const salt = crypto.randomBytes(16).toString('hex');
+      st.jelszoMentes.run({ email, hash: hashel(jelszo, salt), salt, now: now() });
+    };
+    const ujSession = (email) => {
+      const token = crypto.randomBytes(24).toString('base64url');
+      const t = now();
+      st.lejartTorles.run(t);
+      st.sessionUj.run(token, email, t, t + ADMIN_ERVENYES);
+      return token;
+    };
+
+    // Belépés: { email, jelszo }. Ha az adminnak még nincs jelszava: 409 + jelszoBeallitasKell.
+    r.post('/belepes', (req, res) => {
+      const email = normalizeEmail(req.body.email);
+      const tilt = email && sikertelen.get(email);
+      if (tilt && tilt.db >= 10 && tilt.eddig > now()) {
+        throw new HttpError(429, 'Túl sok sikertelen próbálkozás. Próbáld újra 15 perc múlva.');
+      }
+      if (!email || !adminEmails.includes(email)) throw new HttpError(401, 'Hibás e-mail cím vagy jelszó.');
+      if (!st.jelszo.get(email)) return res.status(409).json({ error: 'Még nincs jelszó beállítva.', jelszoBeallitasKell: true });
+      if (!jelszoJo(email, req.body.jelszo)) {
+        const x = sikertelen.get(email) || { db: 0, eddig: 0 };
+        sikertelen.set(email, { db: x.db + 1, eddig: now() + 15 * 60 * 1000 });
+        naplo('admin_hibas_jelszo', { ki: email });
+        throw new HttpError(401, 'Hibás e-mail cím vagy jelszó.');
+      }
+      sikertelen.delete(email);
+      naplo('admin_belepes', { ki: email });
+      res.json({ token: ujSession(email), email });
+    });
+
+    // Első jelszó beállítása: { email, jelszo, appKey } – csak ha még nincs jelszava, és az alkalmazáskulcs is jó.
+    r.post('/elso-jelszo', (req, res) => {
+      const email = normalizeEmail(req.body.email);
+      if (!email || !adminEmails.includes(email)) throw new HttpError(401, 'Ez az e-mail cím nem admin.');
+      if (appKey && (req.get('x-app-key') || req.body.appKey) !== appKey) throw new HttpError(401, 'Hibás alkalmazáskulcs.');
+      if (st.jelszo.get(email)) throw new HttpError(409, 'Ennek az adminnak már van jelszava.');
+      jelszoBeallit(email, req.body.jelszo);
+      naplo('admin_jelszo', { ki: email, megjegyzes: 'Első jelszó beállítva' });
+      res.json({ token: ujSession(email), email });
+    });
+
+    // Innentől minden admin végponthoz érvényes admin belépés kell
+    // ("Authorization: Bearer <token>", fájl letöltésnél "?token=" is lehet).
+    r.use((req, res, next) => {
+      const m = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
+      const token = m ? m[1].trim() : (req.method === 'GET' && typeof req.query.token === 'string' ? req.query.token : null);
+      const s = token && st.session.get(token, now());
+      if (!s || !adminEmails.includes(s.email)) throw new HttpError(401, 'Admin belépés szükséges.');
+      req.admin = s;
+      next();
+    });
+
+    r.get('/me', (req, res) => res.json({ email: req.admin.email, lejar: iso(req.admin.expires_at) }));
+
+    r.post('/kilepes', (req, res) => {
+      st.sessionTorles.run(req.admin.token);
+      res.json({ ok: true });
+    });
+
+    // Jelszócsere: { regi, uj }
+    r.post('/jelszo', (req, res) => {
+      if (!jelszoJo(req.admin.email, req.body.regi)) throw new HttpError(400, 'A jelenlegi jelszó nem jó.');
+      jelszoBeallit(req.admin.email, req.body.uj);
+      naplo('admin_jelszo', { ki: req.admin.email, megjegyzes: 'Jelszó megváltoztatva' });
+      res.json({ ok: true });
+    });
+
+    // Időszak a lekérdezésekhez: from / to (ÉÉÉÉ-HH-NN, a "to" napot is beleértve).
+    const idoszak = (q) => {
+      const from = q.from ? dayStart(String(q.from)) : null;
+      const to = q.to ? dayStart(String(q.to)) : null;
+      if ((q.from && from === null) || (q.to && to === null)) throw new HttpError(400, 'A dátum formátuma: ÉÉÉÉ-HH-NN.');
+      return { from: from ?? 0, to: to !== null ? to + 24 * 3600 * 1000 : 8640000000000000 };
+    };
+
+    // Az időszakban rögzített (nem törölt) munkalapok a rögzítő e-mail címével.
+    const munkalapokIdoszakban = db.prepare(`
+      SELECT w.*, u.email AS created_by_email FROM worksheets w JOIN users u ON u.id = w.created_by
+      WHERE w.deleted = 0 AND w.created_at >= ? AND w.created_at < ? ORDER BY w.created_at`);
+
+    // Áttekintés: darabszámok, napi bontás, felhasználónkénti összesítés.
+    r.get('/attekintes', (req, res) => {
+      const { from, to } = idoszak(req.query);
+      const sorok = munkalapokIdoszakban.all(from, to);
+      const esemeny = db.prepare('SELECT tipus, COUNT(*) AS db FROM naplo WHERE ts >= ? AND ts < ? GROUP BY tipus').all(from, to);
+      const esemenyDb = Object.fromEntries(esemeny.map((e) => [e.tipus, e.db]));
+      const napok = {};
+      const emberek = {};
+      for (const w of sorok) {
+        const d = new Date(w.created_at);
+        const nap = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        napok[nap] = (napok[nap] || 0) + 1;
+        const e = emberek[w.created_by_email] || (emberek[w.created_by_email] = { email: w.created_by_email, munkalap: 0, utolso: 0 });
+        e.munkalap++;
+        e.utolso = Math.max(e.utolso, w.created_at);
+      }
+      res.json({
+        munkalapok: sorok.length,
+        modositasok: esemenyDb.modositas || 0,
+        torlesek: esemenyDb.torles || 0,
+        emailek: esemenyDb.email || 0,
+        aktivFelhasznalok: Object.keys(emberek).length,
+        napiBontas: Object.entries(napok).map(([nap, db]) => ({ nap, db })),
+        emberek: Object.values(emberek).sort((a, b) => b.munkalap - a.munkalap).map((e) => ({ ...e, utolso: iso(e.utolso) })),
+      });
+    });
+
+    // Km statisztika: összes km, emberenként, helyszínenként (az időszakban rögzített munkalapokból).
+    r.get('/statisztika', (req, res) => {
+      const { from, to } = idoszak(req.query);
+      const sorok = munkalapokIdoszakban.all(from, to);
+      let osszKm = 0;
+      const emberek = {};
+      const helyszinek = {};
+      const ertelmezhetetlen = [];
+      for (const w of sorok) {
+        const data = JSON.parse(w.data);
+        const km = kmErtek(data.km);
+        if (km === null && data.km) ertelmezhetetlen.push({ id: w.id, driSzam: w.munkalapszam, km: data.km, ki: w.created_by_email });
+        const k = km || 0;
+        osszKm += k;
+        const e = emberek[w.created_by_email] || (emberek[w.created_by_email] = { email: w.created_by_email, km: 0, munkalap: 0 });
+        e.km += k;
+        e.munkalap++;
+        const hNev = (w.helyszin || '').trim() || '(nincs megadva)';
+        const hKulcs = hNev.toLocaleLowerCase('hu');
+        const h = helyszinek[hKulcs] || (helyszinek[hKulcs] = { helyszin: hNev, munkalap: 0, km: 0, kik: new Set(), utolso: 0 });
+        h.munkalap++;
+        h.km += k;
+        h.kik.add(w.created_by_email);
+        h.utolso = Math.max(h.utolso, w.created_at);
+      }
+      const kerekit = (x) => Math.round(x * 10) / 10;
+      res.json({
+        osszKm: kerekit(osszKm),
+        munkalapok: sorok.length,
+        emberek: Object.values(emberek).sort((a, b) => b.km - a.km).map((e) => ({ ...e, km: kerekit(e.km) })),
+        helyszinek: Object.values(helyszinek).sort((a, b) => b.munkalap - a.munkalap)
+          .map((h) => ({ helyszin: h.helyszin, munkalap: h.munkalap, km: kerekit(h.km), kik: [...h.kik], utolso: iso(h.utolso) })),
+        ertelmezhetetlenKm: ertelmezhetetlen,
+      });
+    });
+
+    // Napló: események időrendben (legújabb elöl), módosításnál a változott mezők előtte / utána.
+    // Szűrők: from, to, tipus (letrehozas, modositas, torles, visszaallitas, email, admin_belepes ...), q (DRI szám / e-mail / ügyfél)
+    r.get('/naplo', (req, res) => {
+      const { from, to } = idoszak(req.query);
+      const where = ['n.ts >= @from', 'n.ts < @to'];
+      const params = { from, to };
+      if (req.query.tipus) { where.push('n.tipus = @tipus'); params.tipus = String(req.query.tipus); }
+      if (req.query.q) {
+        where.push("(ulower(n.ki) LIKE @q ESCAPE '\\' OR ulower(w.munkalapszam) LIKE @q ESCAPE '\\' OR ulower(w.ugyfel) LIKE @q ESCAPE '\\')");
+        params.q = `%${escapeLike(String(req.query.q).trim().toLocaleLowerCase('hu'))}%`;
+      }
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+      const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+      const alap = `FROM naplo n LEFT JOIN worksheets w ON w.id = n.worksheet_id WHERE ${where.join(' AND ')}`;
+      const total = db.prepare(`SELECT COUNT(*) AS db ${alap}`).get(params).db;
+      const sorok = db.prepare(`
+        SELECT n.*, w.munkalapszam, w.ugyfel,
+          (SELECT COUNT(*) FROM naplo n2 WHERE n2.worksheet_id = n.worksheet_id AND n2.tipus = 'modositas' AND n2.id <= n.id) AS mod_sorszam
+        ${alap} ORDER BY n.id DESC LIMIT ${limit} OFFSET ${offset}`).all(params);
+      res.json({
+        total,
+        items: sorok.map((n) => ({
+          id: n.id,
+          ts: iso(n.ts),
+          tipus: n.tipus,
+          ki: n.ki,
+          worksheetId: n.worksheet_id,
+          driSzam: n.munkalapszam,
+          ugyfel: n.ugyfel,
+          megjegyzes: n.megjegyzes,
+          // Módosításnál: melyik változat előtte (sorszám-1) és utána (sorszám) – a PDF-ekhez
+          valtozat: n.tipus === 'modositas' ? n.mod_sorszam : null,
+          elottePdf: !!n.elotte_pdf, // van-e PDF a módosítás előtti változathoz
+          valtozasok: n.tipus === 'modositas' ? kulonbsegek(JSON.parse(n.elotte), JSON.parse(n.utana)) : [],
+        })),
+      });
+    });
+
+    // Egy munkalap változatai és PDF-jei az adminnak (ugyanaz, mint a sima felületen).
+    r.get('/munkalap/:id/valtozatok', (req, res) => {
+      const row = getRow(req.params.id);
+      res.json({ item: serialize(row), valtozatok: valtozatok(row).map(({ _pdfFajl, ...v }) => v) });
+    });
+    r.get('/munkalap/:id/valtozatok/:n/pdf', (req, res) => valtozatPdfKuldes(res, getRow(req.params.id), req.params.n));
+
+    // Törölt munkalapok listája és visszaállítás.
+    r.get('/torolt', (req, res) => {
+      const sorok = db.prepare(`${SELECT_WS} WHERE w.deleted = 1 ORDER BY w.updated_at DESC`).all();
+      res.json(sorok.map(serialize));
+    });
+    r.post('/visszaallitas/:id', (req, res) => {
+      const row = getRow(req.params.id);
+      if (!row.deleted) throw new HttpError(400, 'Ez a munkalap nincs törölve.');
+      // Az admin műveletet egy (szükség esetén létrehozott) felhasználóhoz kötjük az admin e-mail címével.
+      let u = stmt.userByEmail.get(req.admin.email);
+      if (!u) {
+        const info = stmt.insertUser.run({ email: req.admin.email, name: null, now: now() });
+        u = { id: Number(info.lastInsertRowid) };
+      }
+      saveWorksheet({ user_id: u.id, device_id: null, user_email: req.admin.email }, { id: row.id, deleted: false });
+      res.json(serialize(wsFullById.get(row.id)));
+    });
+
+    // Felhasználók: munkalapok száma, utolsó aktivitás, eszközök.
+    r.get('/felhasznalok', (req, res) => {
+      const sorok = db.prepare(`
+        SELECT u.id, u.email, u.created_at, u.last_seen,
+          (SELECT COUNT(*) FROM worksheets w WHERE w.created_by = u.id AND w.deleted = 0) AS munkalap,
+          (SELECT GROUP_CONCAT(COALESCE(d.name, d.id), ' | ') FROM devices d WHERE d.last_user_id = u.id) AS eszkozok
+        FROM users u ORDER BY u.last_seen DESC`).all();
+      res.json(sorok.map((u) => ({
+        email: u.email, munkalap: u.munkalap, eszkozok: u.eszkozok || '',
+        elsoBelepes: iso(u.created_at), utolsoAktivitas: iso(u.last_seen), admin: adminEmails.includes(u.email),
+      })));
+    });
+
+    // CSV export az időszak munkalapjairól (Excelben megnyitható: pontosvesszővel elválasztva, UTF-8).
+    r.get('/export.csv', (req, res) => {
+      const { from, to } = idoszak(req.query);
+      const sorok = munkalapokIdoszakban.all(from, to);
+      const fej = ['DRI szám', 'Rögzítve', 'Rögzítette', 'Ügyfél', 'Ügyfél e-mail', 'Helyszín', 'Gép', 'Időtartam', 'Km', 'Km (szám)', 'Elvégzett munka', 'Hiba leírása', 'Hely, dátum', 'Módosítások', 'E-mail'];
+      const cella = (v) => {
+        const x = v === undefined || v === null ? '' : String(v);
+        return /[";\n\r]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x;
+      };
+      const modDb = db.prepare("SELECT COUNT(*) AS db FROM naplo WHERE worksheet_id = ? AND tipus = 'modositas'");
+      const sorokCsv = sorok.map((w) => {
+        const d = JSON.parse(w.data);
+        return [d.driSzam, new Date(w.created_at).toLocaleString('hu-HU'), w.created_by_email, d.ugyfel, d.ugyfelEmail, d.helyszin,
+          d.gep, d.idotartam, d.km, kmErtek(d.km) ?? '', d.elvegzettMunka, d.hibaLeiras, d.datum, modDb.get(w.id).db, w.email_status]
+          .map(cella).join(';');
+      });
+      res.type('text/csv; charset=utf-8');
+      res.set('Content-Disposition', `attachment; filename="munkalapok_${req.query.from || 'kezdet'}_${req.query.to || 'ma'}.csv"`);
+      res.send('﻿' + [fej.join(';'), ...sorokCsv].join('\r\n'));
+    });
+
+    return r;
+  }
+
+  app.use('/api/admin', adminRouter());
   app.use('/api', api);
   // Minden más cím: a böngészős felület fájljai a public mappából (index.html).
   app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -654,4 +1095,4 @@ function createApp(db, options = {}) {
   return app;
 }
 
-module.exports = { createApp, extractSearchFields, formatDri };
+module.exports = { createApp, extractSearchFields, formatDri, kmErtek, kulonbsegek };

@@ -12,6 +12,9 @@
 //   worksheets        – a munkalapok (egy sor = egy munkalap)
 //   worksheet_history – a munkalapok korábbi változatai (semmi nem vész el)
 //   dri_foglalasok    – a kiosztott DRI munkalapszámok (melyik szám melyik munkalapé)
+//   naplo             – eseménynapló: létrehozás, módosítás (előtte / utána), törlés, admin műveletek
+//   admin_jelszavak   – az adminok jelszava (titkosítva, "scrypt" eljárással)
+//   admin_sessions    – admin belépések (12 óráig érvényesek)
 //   meta              – belső számlálók: a szinkronhoz ('seq') és a következő DRI számhoz ('dri_kovetkezo')
 // A "CREATE TABLE IF NOT EXISTS" miatt az első indításkor létrejönnek, később nem nyúl hozzájuk.
 // =============================================================================
@@ -107,6 +110,37 @@ CREATE TABLE IF NOT EXISTS dri_foglalasok (
   user_id       INTEGER REFERENCES users(id),
   device_id     TEXT,
   created_at    INTEGER NOT NULL
+);
+
+-- Eseménynapló. Minden létrehozás, módosítás, törlés, visszaállítás és admin belépés ide kerül.
+-- Módosításnál az "elotte" és "utana" oszlopban a munkalap teljes tartalma van (JSON), az
+-- "elotte_pdf" a módosítás előtti PDF fájl neve (a munkalap mappájában), hogy a régi változat is megnézhető legyen.
+CREATE TABLE IF NOT EXISTS naplo (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts            INTEGER NOT NULL,
+  tipus         TEXT NOT NULL,
+  worksheet_id  TEXT,
+  ki            TEXT,
+  elotte        TEXT,
+  utana         TEXT,
+  elotte_pdf    TEXT,
+  megjegyzes    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_naplo_ws ON naplo(worksheet_id);
+CREATE INDEX IF NOT EXISTS idx_naplo_ts ON naplo(ts);
+
+CREATE TABLE IF NOT EXISTS admin_jelszavak (
+  email       TEXT PRIMARY KEY,
+  hash        TEXT NOT NULL,
+  salt        TEXT NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  token       TEXT PRIMARY KEY,
+  email       TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL
 );
 `;
 

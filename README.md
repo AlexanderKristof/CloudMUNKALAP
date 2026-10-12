@@ -21,6 +21,44 @@ küld be munkalapot, a szerver egy helyen tárolja őket, és kereshetővé tesz
   lehet nyitni egy munkalap PDF-jét, aláírásait, illetve újra lehet küldeni e-mailben.
 - **Böngészőben:** a szerver címét megnyitva ugyanez elérhető, számítógépről is.
 
+## Munkalap módosítása, változatok
+
+- Beküldött munkalap **módosítható** a böngészőben (részletek → „Szerkesztés”) és az appban
+  (Korábbi munkalapok → munkalap → ceruza ikon).
+- A **DRI szám ugyanaz marad**, az aláírások nem változnak.
+- A szerver **új PDF-et készít**, rajta pirossal, a „Hely, dátum” sor mellett:
+  `Módosítás dátuma: 2026.10.12. 14:35`.
+- A **régi változat és a régi PDF megmarad**. A listában a módosított munkalapoknál „N× módosítva” jelzés és
+  egy „Változatok ▾” lenyíló látható. Ebben minden változat megnyitható, és látszik, mi változott (régi → új).
+- A szerver a PDF-hez a `server/assets/sablon.png` hátteret használja (ugyanaz a kép, mint az appban az
+  `assets/sablon.png`), és a `server/fonts/` mappa Roboto betűtípusát.
+
+## Admin felület
+
+A böngészős felület jobb felső sarkában az **Admin** link, vagy közvetlenül: `https://munkalap.drindustrie.hu/admin.html`
+
+- Csak az `ADMIN_EMAILS` beállításban felsorolt e-mail címekkel lehet belépni (lásd lent).
+- **Első belépés:** az e-mail cím beírása után a felület jelszó beállítását kéri (legalább 8 karakter).
+  Ehhez egyszer meg kell adni az alkalmazáskulcsot (`APP_KEY`) is, hogy idegen ne állíthasson be jelszót.
+- A jelszó a „Jelszó” fülön módosítható. 10 hibás próbálkozás után 15 percig nem lehet belépni.
+- A belépés 12 óráig érvényes.
+
+Fülek:
+| Fül | Tartalom |
+|-----|----------|
+| Áttekintés | munkalapok, módosítások, törlések, kiküldött e-mailek száma, munkalapok naponta, felhasználónként |
+| Km és helyszínek | összes megtett km, km emberenként (összesen sorral), helyszínek (hány munkalap, km, kik jártak ott), nem értelmezhető km értékek |
+| Napló | ki, mikor, mit csinált: új munkalap, módosítás (előtte → utána, mindkét PDF), törlés, visszaállítás, e-mail, admin belépés |
+| Törölt munkalapok | a törölt munkalapok, visszaállítás gombbal |
+| Felhasználók | ki hány munkalapot rögzített, mikor volt utoljára aktív, milyen eszközökön |
+| Jelszó | jelszócsere |
+
+A felső sávban **dátumválasztó (ettől – eddig)** és gyorsgombok (ez a hónap, előző hónap, idén, összes). Minden
+fül ezt az időszakot mutatja. Az **Excel export (CSV)** gomb az időszak munkalapjait tölti le.
+
+A km összesítés a „Megtett km” mezőben lévő első számot veszi (pl. „120 km” → 120, „45,5” → 45,5).
+Ahol nincs szám, azt a „Nem értelmezhető km értékek” lista mutatja.
+
 ## Felépítés
 
 ```
@@ -30,9 +68,13 @@ app/lib/
   munkalap_api.dart         kapcsolat a szerverrel + várólista net nélküli munkához
   korabbi_munkalapok.dart   Korábbi munkalapok képernyő (keresés, PDF, e-mail újraküldés)
 server/                     Node.js + Express + SQLite szerver
-  src/app.js                API végpontok
+  src/app.js                API végpontok (admin végpontok is)
   src/db.js                 adatbázis-séma
+  src/pdf.js                a módosított munkalapok PDF-je
+  assets/sablon.png         a PDF háttere (ide kell feltölteni, lásd lent)
+  fonts/                    Roboto betűtípus a PDF-hez
   public/index.html         böngészős kereső felület
+  public/admin.html         admin felület (statisztika, napló)
   test/                     automata tesztek (npm test)
 docker-compose.yml          telepítés Dockerrel
 ```
@@ -102,6 +144,9 @@ WantedBy=multi-user.target
 
 Utána: `systemctl enable --now munkalap`.
 
+**A PDF háttérképe:** a Flutter projekt `assets/sablon.png` fájlját fel kell tölteni a szerverre ide:
+`server/assets/sablon.png`. Enélkül a módosítás menti az adatokat, de új PDF nem készül.
+
 ### HTTPS (kötelező a telefonos apphoz)
 
 Az Android és az iOS alapból **nem enged sima `http://` kapcsolatot**. Kell egy domain vagy aldomain,
@@ -128,6 +173,7 @@ csak a Caddy-n keresztül legyen elérhető.
 | `SMTP_PORT`      | `465`                  | SMTP port |
 | `MAIL_FROM_NAME` | `DR Industrie Szerviz` | A feladó neve az e-mailben |
 | `DRI_KEZDO`      | `2001`                 | Az első kiosztandó DRI szám (csak az adatbázis első létrehozásakor számít) |
+| `ADMIN_EMAILS`   | nincs                  | Az admin felületre beléphető e-mail címek, vesszővel elválasztva (pl. `fonok@drindustrie.hu,iroda@drindustrie.hu`) |
 | `DATA_DIR`       | `./data`               | Adatbázis és fájlok helye |
 | `PORT`           | `3000`                 | Port |
 
@@ -182,6 +228,10 @@ Minden végpont `/api` alatt van. Belépés után a tokent `Authorization: Beare
 | `DELETE /api/worksheets/:id` | Törlés (csak megjelölés, az adat megmarad) |
 | `GET /api/users` | Felhasználók és munkalapjaik száma |
 | `POST /api/dri/foglalas` `{ worksheetId }` | DRI munkalapszám lefoglalása (ugyanarra a munkalapra mindig ugyanazt adja) |
+| `PUT /api/worksheets/:id/modositas` `{ data }` | Munkalap módosítása (új PDF készül, a régi változat megmarad) |
+| `GET /api/worksheets/:id/valtozatok` | Az eredeti és a módosított változatok |
+| `GET /api/worksheets/:id/valtozatok/:n/pdf` | Egy változat PDF-je (0 = eredeti) |
+| `/api/admin/...` | Admin végpontok: `belepes`, `elso-jelszo`, `jelszo`, `attekintes`, `statisztika`, `naplo`, `torolt`, `visszaallitas/:id`, `felhasznalok`, `export.csv` |
 | `POST /api/sync` | Szinkron több eszköz között (változások lekérése egy kurzor óta) |
 
 A munkalap adatai (`data`) az app mezőnevei szerint: `driSzam`, `ugyfel`, `ugyfelEmail`, `helyszin`, `gep`,

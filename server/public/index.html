@@ -58,13 +58,27 @@
   #login input { width:100%; }
   #login button { margin-top:16px; width:100%; }
   .hidden { display:none !important; }
+  /* Módosítás jelzés a listában, és a lenyíló változatlista */
+  .mod-badge { color:var(--danger); font-weight:600; font-size:13px; white-space:nowrap; }
+  button.toggle { background:none; color:var(--danger); border:1px solid var(--danger); padding:2px 10px; font-size:13px; white-space:nowrap; }
+  tr.versions > td { background:color-mix(in srgb, var(--danger) 6%, transparent); padding:8px 16px; }
+  .ver { display:flex; flex-wrap:wrap; gap:4px 12px; align-items:baseline; padding:6px 0; border-bottom:1px dashed var(--line); }
+  .ver:last-child { border-bottom:none; }
+  .ver b { min-width:110px; }
+  .ver.mod b { color:var(--danger); }
+  .ver ul { margin:2px 0 0; padding-left:18px; width:100%; font-size:13px; }
+  .ver del { color:var(--muted); }
+  .ver ins { text-decoration:none; color:var(--danger); font-weight:600; }
+  /* Szerkesztő űrlap a részleteknél */
+  dl.fields input, dl.fields textarea { width:100%; font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); }
+  dl.fields textarea { min-height:90px; resize:vertical; }
   @media (max-width: 640px) { dl.fields { grid-template-columns:1fr; } dl.fields dt { margin-top:6px; } }
 </style>
 </head>
 <body>
 <header>
   <h1>DR Industrie – Munkalapok</h1>
-  <div id="who" class="hidden"><span id="whoName"></span> · <button class="link" id="logout" style="color:#fff">Kilépés</button></div>
+  <div><a href="/admin.html" class="link" style="margin-right:12px">Admin</a><span id="who" class="hidden"><span id="whoName"></span> · <button class="link" id="logout" style="color:#fff">Kilépés</button></span></div>
 </header>
 
 <main>
@@ -102,12 +116,20 @@
         <input id="resendTo" type="email" placeholder="Címzett (alapból az ügyfél)">
         <button id="resend" class="secondary">E-mail küldése</button>
         <span id="emailInfo" class="muted"></span>
+        <button id="editBtn" class="secondary">Szerkesztés</button>
         <button id="deleteBtn" class="danger">Törlés</button>
+      </div>
+      <!-- Szerkesztéskor ez a sáv jelenik meg a mentés / mégse gombokkal -->
+      <div id="editBar" class="actions hidden">
+        <button id="saveEdit">Módosítás mentése</button>
+        <button id="cancelEdit" class="secondary">Mégse</button>
+        <span class="muted">A DRI szám és az aláírások nem módosíthatók. A módosításról új PDF készül, pirossal a módosítás idejével; a régi változat megmarad.</span>
+        <span id="editInfo" class="err"></span>
       </div>
       <dl id="detailFields" class="fields"></dl>
       <div id="detailSigs" class="sigs"></div>
-      <h3>Korábbi változatok</h3>
-      <div id="detailHistory" class="muted"></div>
+      <h3>Változatok</h3>
+      <div id="detailVersions"></div>
     </div>
 
     <!-- Találati lista -->
@@ -115,7 +137,7 @@
       <p id="count" class="muted"></p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Rögzítve</th><th>DRI szám</th><th>Ügyfél</th><th>Helyszín</th><th>Gép</th><th>Rögzítette</th><th>E-mail</th></tr></thead>
+          <thead><tr><th>Rögzítve</th><th>DRI szám</th><th>Ügyfél</th><th>Helyszín</th><th>Gép</th><th>Rögzítette</th><th>E-mail</th><th>Módosítva</th><th></th></tr></thead>
           <tbody id="rows"></tbody>
         </table>
       </div>
@@ -149,6 +171,12 @@ const FIELDS = [
   ['hibaLeiras', 'Hiba leírása + javaslat'],
   ['datum', 'Hely, dátum'],
 ];
+// A módosítható mezők (a DRI szám nem módosítható). Többsorosnál textarea.
+const MODOSITHATO = ['ugyfel', 'ugyfelEmail', 'helyszin', 'gep', 'idotartam', 'km', 'elvegzettMunka', 'hibaLeiras', 'datum'];
+const TOBBSOROS = ['elvegzettMunka', 'hibaLeiras'];
+const MEZO_NEV = Object.fromEntries(FIELDS.map(([k, label]) => [k, label]));
+let szerkesztes = false; // igaz, amíg a részleteknél a szerkesztő űrlap látszik
+
 // Az e-mail állapotok felirata és színe.
 const EMAIL_STATUS = { kuldve: ['Elküldve', 'ok'], hiba: ['Hiba', 'err'], nincs: ['Nem ment ki', 'muted'] };
 
@@ -203,6 +231,8 @@ async function search(reset) {
       <td class="nowrap">${fmtDate(w.createdAt)}</td><td class="nowrap">${w.munkalapszam ? 'DRI-' + esc(w.munkalapszam) : ''}</td>
       <td>${esc(w.ugyfel)}</td><td>${esc(w.helyszin)}</td><td>${esc(w.gep)}</td>
       <td>${esc(w.createdBy.name || w.createdBy.email)}</td><td>${emailBadge(w.email)}</td>
+      <td>${w.modositasokSzama ? `<span class="mod-badge">${w.modositasokSzama}× módosítva</span>` : ''}</td>
+      <td>${w.modositasokSzama ? `<button class="toggle" data-id="${esc(w.id)}" title="Változatok megjelenítése">Változatok ▾</button>` : ''}</td>
     </tr>`).join(''));
   offset += r.items.length;
   $('count').textContent = `${r.total} munkalap`;
@@ -214,7 +244,7 @@ function renderDetail(w) {
   current = w;
   $('detailTitle').textContent = [w.munkalapszam && 'DRI-' + w.munkalapszam, w.ugyfel].filter(Boolean).join(' – ') || w.id;
   $('detailMeta').textContent = `Rögzítette: ${who(w.createdBy)}, ${fmtDate(w.createdAt)}`
-    + (w.version > 1 ? ` · Módosította: ${who(w.updatedBy)}, ${fmtDate(w.updatedAt)} · ${w.version}. változat` : '')
+    + (w.modositasokSzama ? ` · Utoljára módosította: ${who(w.updatedBy)}, ${fmtDate(w.updatedAt)} · ${w.modositasokSzama}× módosítva` : '')
     + (w.device ? ` · Eszköz: ${w.device.name || w.device.id}` : '');
   $('pdfLink').classList.toggle('hidden', !w.files.pdf);
   $('pdfLink').href = w.files.pdf ? fileUrl(w, 'pdf') : '#';
@@ -222,25 +252,59 @@ function renderDetail(w) {
   $('emailInfo').innerHTML = emailBadge(w.email)
     + (w.email.sentAt ? ` (${fmtDate(w.email.sentAt)})` : '') + (w.email.error ? ` – ${esc(w.email.error)}` : '');
   const d = w.data;
+  // Szerkesztéskor beviteli mezők, egyébként csak szöveg.
+  if (szerkesztes) {
+    $('detailFields').innerHTML = FIELDS.map(([k, label, fmt]) => {
+      if (!MODOSITHATO.includes(k)) return `<dt>${esc(label)}</dt><dd>${esc(fmt ? fmt(d[k]) : d[k]) || '–'} 🔒</dd>`;
+      const ertek = esc(d[k] ?? '');
+      return `<dt>${esc(label)}</dt><dd>${TOBBSOROS.includes(k)
+        ? `<textarea data-mezo="${k}">${ertek}</textarea>` : `<input data-mezo="${k}" value="${ertek}">`}</dd>`;
+    }).join('');
+  } else {
   const known = new Set(FIELDS.map((f) => f[0]));
   const extra = Object.keys(d).filter((k) => !known.has(k)).map((k) => [k, k]);
   $('detailFields').innerHTML = [...FIELDS, ...extra]
     .map(([k, label, fmt]) => `<dt>${esc(label)}</dt><dd>${esc(fmt ? fmt(d[k]) : (typeof d[k] === 'object' ? JSON.stringify(d[k]) : d[k])) || '–'}</dd>`).join('');
+  }
+  $('editBar').classList.toggle('hidden', !szerkesztes);
+  $('editBtn').classList.toggle('hidden', szerkesztes || w.deleted);
   $('detailSigs').innerHTML = [['alairasUgyfel', 'Ügyfél aláírása'], ['alairasSzerviz', 'Szerviz aláírása']]
     .filter(([k]) => w.files[k])
     .map(([k, label]) => `<figure><img src="${fileUrl(w, k)}" alt="${label}"><figcaption class="muted">${label}</figcaption></figure>`).join('');
 }
 
-// Munkalap megnyitása: adatok + korábbi változatok lekérése a szerverről.
+// A változatok (eredeti + módosítások) listája HTML-ként: ki, mikor, PDF, és mi változott (előtte → utána).
+function valtozatokHtml(id, lista) {
+  return lista.map((v) => `
+    <div class="ver ${v.sorszam ? 'mod' : ''}">
+      <b>${esc(v.cim)}</b>
+      <span>${fmtDate(v.ts)}</span>
+      <span class="muted">${esc(v.ki || '')}</span>
+      ${v.pdf ? `<a href="/api/worksheets/${encodeURIComponent(id)}/valtozatok/${v.sorszam}/pdf?token=${encodeURIComponent(token)}" target="_blank" rel="noopener">PDF megnyitása</a>` : '<span class="muted">nincs PDF</span>'}
+      ${v.valtozasok.length ? `<ul>${v.valtozasok.map((c) => `<li>${esc(MEZO_NEV[c.mezo] || c.mezo)}: <del>${esc(c.elotte) || '(üres)'}</del> → <ins>${esc(c.utana) || '(üres)'}</ins></li>`).join('')}</ul>` : ''}
+    </div>`).join('');
+}
+
+// Munkalap megnyitása: adatok + változatok lekérése a szerverről.
 async function openDetail(id) {
-  const [w, hist] = await Promise.all([api('/worksheets/' + encodeURIComponent(id)), api('/worksheets/' + encodeURIComponent(id) + '/history')]);
+  const [w, valt] = await Promise.all([api('/worksheets/' + encodeURIComponent(id)), api('/worksheets/' + encodeURIComponent(id) + '/valtozatok')]);
+  szerkesztes = false;
   renderDetail(w);
   $('resendTo').value = '';
-  $('detailHistory').innerHTML = hist.length
-    ? hist.map((h) => `<details><summary>${h.version}. változat – ${esc(who(h.updatedBy))}, ${fmtDate(h.updatedAt)}${h.deleted ? ' (törölt)' : ''}</summary><pre>${esc(JSON.stringify(h.data, null, 2))}</pre></details>`).join('')
-    : 'Nincs korábbi változat.';
+  $('editInfo').textContent = '';
+  $('detailVersions').innerHTML = valt.length > 1 ? valtozatokHtml(id, valt) : '<span class="muted">Nincs módosítás, csak az eredeti változat létezik.</span>';
   $('detail').classList.remove('hidden');
   $('detail').scrollIntoView({ behavior: 'smooth' });
+}
+
+// Lenyíló változatlista a listában ("Változatok ▾" gomb): a sor alá beszúr egy sort a változatokkal.
+async function valtozatokNyitas(gomb) {
+  const tr = gomb.closest('tr');
+  const kovetkezo = tr.nextElementSibling;
+  if (kovetkezo && kovetkezo.classList.contains('versions')) { kovetkezo.remove(); gomb.textContent = 'Változatok ▾'; return; }
+  const lista = await api('/worksheets/' + encodeURIComponent(gomb.dataset.id) + '/valtozatok');
+  tr.insertAdjacentHTML('afterend', `<tr class="versions"><td colspan="9">${valtozatokHtml(gomb.dataset.id, lista)}</td></tr>`);
+  gomb.textContent = 'Változatok ▴';
 }
 
 // --- Gombok és események ---
@@ -262,7 +326,32 @@ $('search').addEventListener('submit', (e) => { e.preventDefault(); search(true)
 // Továbbiak gomb (lapozás)
 $('more').addEventListener('click', () => search(false));
 // Kattintás a lista egy sorára -> részletek
-$('rows').addEventListener('click', (e) => { const tr = e.target.closest('tr.row'); if (tr) openDetail(tr.dataset.id); });
+$('rows').addEventListener('click', (e) => {
+  const gomb = e.target.closest('button.toggle');
+  if (gomb) { valtozatokNyitas(gomb).catch((err) => alert(err.message)); return; } // a lenyíló gomb nem nyitja meg a részleteket
+  if (e.target.closest('tr.versions')) return; // a változatlistán belüli kattintás (pl. PDF link) maradjon ott
+  const tr = e.target.closest('tr.row');
+  if (tr) openDetail(tr.dataset.id);
+});
+// Szerkesztés: a mezők beviteli mezőkké válnak
+$('editBtn').addEventListener('click', () => { szerkesztes = true; $('editInfo').textContent = ''; renderDetail(current); });
+// Mégse: vissza a megtekintéshez, mentés nélkül
+$('cancelEdit').addEventListener('click', () => { szerkesztes = false; renderDetail(current); });
+// Módosítás mentése: csak a ténylegesen megváltozott mezőket küldjük
+$('saveEdit').addEventListener('click', async () => {
+  const uj = {};
+  document.querySelectorAll('#detailFields [data-mezo]').forEach((el) => { uj[el.dataset.mezo] = el.value; });
+  const valtozott = Object.keys(uj).filter((k) => (current.data[k] ?? '') !== uj[k]);
+  if (!valtozott.length) { $('editInfo').textContent = 'Nem változott semmi.'; return; }
+  if (!confirm(`Mented a módosítást? Változik: ${valtozott.map((k) => MEZO_NEV[k] || k).join(', ')}`)) return;
+  $('saveEdit').disabled = true;
+  try {
+    await api(`/worksheets/${encodeURIComponent(current.id)}/modositas`, { method: 'PUT', body: JSON.stringify({ data: uj }) });
+    await openDetail(current.id);
+    search(true);
+  } catch (err) { $('editInfo').textContent = err.message; }
+  $('saveEdit').disabled = false;
+});
 // Vissza a listához
 $('closeDetail').addEventListener('click', () => $('detail').classList.add('hidden'));
 // E-mail küldése (megerősítés után)

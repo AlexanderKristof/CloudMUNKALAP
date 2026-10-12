@@ -326,6 +326,36 @@ class MunkalapApi {
     _ellenoriz(await _kuld((h) => http.delete(uri, headers: h)));
   }
 
+  // --- Módosítás, változatok --------------------------------------------------
+
+  /// Munkalap módosítása. [adatok]: a megváltozott mezők (ugyfel, helyszin, km, ...).
+  /// A DRI szám és az aláírások nem változnak. A szerver elmenti az új változatot,
+  /// és új PDF-et készít, rajta pirossal a módosítás idejével; a régi változat megmarad.
+  /// Visszaadja a frissített munkalapot (ugyanolyan formában, mint a keresés).
+  Future<Map<String, dynamic>> modositas(String id, Map<String, String> adatok) async {
+    final uri = Uri.parse('$kSzerverCim/api/worksheets/${Uri.encodeComponent(id)}/modositas');
+    final body = _ellenoriz(await _kuld((h) => http.put(uri,
+        headers: {...h, 'Content-Type': 'application/json'}, body: jsonEncode({'data': adatok}))));
+    return body['item'] as Map<String, dynamic>;
+  }
+
+  /// A munkalap változatai időrendben: az eredeti (sorszam 0) és minden módosítás.
+  /// Mindegyikben: cim, ts (időpont), ki, data, pdf (van-e PDF), valtozasok ([{mezo, elotte, utana}]).
+  Future<List<Map<String, dynamic>>> valtozatok(String id) async {
+    final uri = Uri.parse('$kSzerverCim/api/worksheets/${Uri.encodeComponent(id)}/valtozatok');
+    final res = await _kuld((h) => http.get(uri, headers: h));
+    if (res.statusCode != 200) _ellenoriz(res); // hiba esetén SzerverHiba-t dob
+    return (jsonDecode(utf8.decode(res.bodyBytes)) as List).cast<Map<String, dynamic>>();
+  }
+
+  /// Egy változat PDF-jének letöltése ([sorszam] 0 = eredeti, 1 = első módosítás, ...).
+  Future<Uint8List> valtozatPdf(String id, int sorszam) async {
+    final uri = Uri.parse('$kSzerverCim/api/worksheets/${Uri.encodeComponent(id)}/valtozatok/$sorszam/pdf');
+    final res = await _kuld((h) => http.get(uri, headers: h));
+    if (res.statusCode != 200) _ellenoriz(res);
+    return res.bodyBytes;
+  }
+
   /// A munkalap PDF-jének (újra)küldése e-mailben. Ha [cimzett] üres, az ügyfél címére megy.
   /// (Csak akkor működik, ha a szerveren be van állítva az SMTP_USER / SMTP_PASS.)
   Future<BekuldesEredmeny> emailKuldes(String id, {String? cimzett}) async {

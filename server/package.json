@@ -12,9 +12,11 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
     "better-sqlite3": "^13.0.3",
     "express": "^5.2.1",
     "multer": "^2.4.0",
-    "nodemailer": "^10.0.15"
+    "nodemailer": "^10.0.15",
+    "pdf-lib": "^1.17.1"
   }
 }

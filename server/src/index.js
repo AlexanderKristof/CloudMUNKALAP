@@ -45,12 +45,15 @@ const app = createApp(db, {
   filesDir: FILES_DIR,
   sendMail,
   mailFrom,
+  // Az admin felületre beléphető e-mail címek, vesszővel elválasztva (pl. ADMIN_EMAILS=a@ceg.hu,b@ceg.hu)
+  adminEmails: (process.env.ADMIN_EMAILS || '').split(',').map((e) => e.trim()).filter(Boolean),
 });
 
 // Indítás. Az üzenetek a naplóban látszanak: journalctl -u munkalap -n 20
 const server = app.listen(PORT, HOST, () => {
   console.log(`Munkalap szerver fut: http://${HOST}:${PORT} (adatbázis: ${DB_FILE}, fájlok: ${FILES_DIR})`);
   if (!process.env.APP_KEY) console.warn('Figyelem: APP_KEY nincs beállítva, bárki bejelentkezhet, aki eléri a szervert.');
+  if (!process.env.ADMIN_EMAILS) console.warn('Figyelem: ADMIN_EMAILS nincs beállítva, az admin felületre senki nem tud belépni.');
   if (!sendMail) console.warn('Figyelem: SMTP_USER / SMTP_PASS nincs beállítva, e-mail küldés kikapcsolva.');
 });
 

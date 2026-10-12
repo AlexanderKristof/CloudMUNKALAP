@@ -4,7 +4,9 @@
 // Két képernyő van ebben a fájlban:
 //   1. KorabbiMunkalapokScreen – lista a szerveren lévő munkalapokról, keresővel
 //   2. MunkalapReszletekScreen – egy munkalap részletei: mezők, aláírások,
-//      PDF megnyitása, e-mail küldése, törlés
+//      PDF megnyitása, e-mail küldése, törlés, módosítás, korábbi változatok
+//   3. MunkalapSzerkesztesScreen – egy beküldött munkalap módosítása
+//      (a DRI szám ugyanaz marad, a szerver új PDF-et készít pirossal a módosítás idejével)
 // Az adatokat a szerverről kérjük le (munkalap_api.dart), ezért ehhez net kell.
 // =============================================================================
 
@@ -157,6 +159,8 @@ class _KorabbiMunkalapokScreenState extends State<KorabbiMunkalapokScreen> {
                             if ((w['gep'] ?? '').toString().isNotEmpty) w['gep'],
                             if ((w['helyszin'] ?? '').toString().isNotEmpty) w['helyszin'],
                             '${_datum(w['createdAt'] as String?)} · ${rogzitette['email']}',
+                            // Ha módosították: hányszor (a régi változatok a részleteknél nézhetők meg)
+                            if (((w['modositasokSzama'] as num?) ?? 0) > 0) '✎ ${w['modositasokSzama']}× módosítva',
                           ].join('\n')),
                           isThreeLine: true,
                           trailing: Icon(
@@ -188,8 +192,9 @@ class _KorabbiMunkalapokScreenState extends State<KorabbiMunkalapokScreen> {
 // ---------------------------------------------------------------------------
 // EGY MUNKALAP RÉSZLETEI
 // ---------------------------------------------------------------------------
-// Fent: ki rögzítette, e-mail állapot, PDF és E-mail gomb. Alatta a mezők és az
-// aláírások. Jobb felül a kuka ikon: törlés megerősítő kérdéssel.
+// Fent: ki rögzítette, e-mail állapot, PDF és E-mail gomb. Alatta a mezők, az
+// aláírások és (ha módosították) a korábbi változatok, mindegyik a saját PDF-jével.
+// Jobb felül: ceruza = módosítás, kuka = törlés megerősítő kérdéssel.
 class MunkalapReszletekScreen extends StatefulWidget {
   /// A munkalap adatai, ahogy a szerver a listában küldte (id, munkalapszam, data, files, email...).
   final Map<String, dynamic> munkalap;
@@ -217,8 +222,110 @@ class _MunkalapReszletekScreenState extends State<MunkalapReszletekScreen> {
     ['datum', 'Hely, dátum'],
   ];
 
-  /// Rövidítés: _w = a megjelenített munkalap.
-  Map<String, dynamic> get _w => widget.munkalap;
+  /// A megjelenített munkalap. Módosítás után a szerver által visszaküldött új változatra cseréljük.
+  late Map<String, dynamic> _w = widget.munkalap;
+
+  /// A változatok listája a szerverről (csak ha a munkalapot már módosították).
+  Future<List<Map<String, dynamic>>>? _valtozatok;
+
+  @override
+  void initState() {
+    super.initState();
+    _valtozatokBetoltese();
+  }
+
+  /// A változatok lekérése a szerverről – csak ha van mit mutatni (legalább egy módosítás).
+  void _valtozatokBetoltese() {
+    _valtozatok = ((_w['modositasokSzama'] as num?) ?? 0) > 0
+        ? MunkalapApi.instance.valtozatok(_w['id'] as String)
+        : null;
+  }
+
+  /// Ceruza ikon: megnyitja a szerkesztő képernyőt. Ha ott elmentették a módosítást,
+  /// a szerver visszaküldi a frissített munkalapot, és azt mutatjuk tovább.
+  Future<void> _szerkesztes() async {
+    final uj = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(builder: (_) => MunkalapSzerkesztesScreen(munkalap: _w)),
+    );
+    if (uj == null || !mounted) return;
+    setState(() {
+      _w = uj;
+      _valtozatokBetoltese();
+    });
+    _uzenet('Módosítás mentve. Az új PDF-en pirossal szerepel a módosítás ideje.');
+  }
+
+  /// Egy régebbi (vagy az aktuális) változat PDF-jének megnyitása.
+  Future<void> _valtozatPdf(Map<String, dynamic> v) async {
+    setState(() => _dolgozik = true);
+    try {
+      final sorszam = (v['sorszam'] as num).toInt();
+      final bytes = await MunkalapApi.instance.valtozatPdf(_w['id'] as String, sorszam);
+      await Printing.layoutPdf(
+        onLayout: (_) async => bytes,
+        name: 'Munkalap_DRI_${_w['munkalapszam'] ?? ''}${sorszam > 0 ? '_modositas_$sorszam' : ''}',
+      );
+    } catch (e) {
+      _uzenet('Nem sikerült letölteni a PDF-et: $e');
+    } finally {
+      if (mounted) setState(() => _dolgozik = false);
+    }
+  }
+
+  /// A változatok listája: eredeti + módosítások, mindegyiknél ki és mikor, mi változott, és PDF gomb.
+  Widget _valtozatokLista() {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _valtozatok,
+      builder: (context, snap) {
+        if (snap.hasError) return Text('A változatok nem tölthetők be: ${snap.error}');
+        if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+        final mezoNev = {for (final m in _mezok) m[0]: m[1]};
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final v in snap.data!)
+              Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ListTile(
+                  title: Text(
+                    v['cim'] as String,
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: (v['sorszam'] as num) > 0 ? Colors.red.shade700 : null,
+                    ),
+                  ),
+                  subtitle: Text([
+                    '${_datum(v['ts'] as String?)} · ${v['ki'] ?? ''}',
+                    // Mi változott az előző változathoz képest: "Megtett km: 120 → 130"
+                    for (final c in (v['valtozasok'] as List).cast<Map<String, dynamic>>())
+                      '${mezoNev[c['mezo']] ?? c['mezo']}: ${_ures(c['elotte'])} → ${_ures(c['utana'])}',
+                  ].join('\n')),
+                  trailing: v['pdf'] == true
+                      ? IconButton(
+                          icon: const Icon(Icons.picture_as_pdf),
+                          tooltip: 'PDF megnyitása',
+                          onPressed: _dolgozik ? null : () => _valtozatPdf(v),
+                        )
+                      : null,
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Üres érték jelzése a változások listájában.
+  String _ures(Object? v) => (v ?? '').toString().isEmpty ? '(üres)' : v.toString();
+
+  /// Dátum magyar formában, percre pontosan: "2026.10.12. 14:35".
+  String _datum(String? iso) {
+    if (iso == null) return '';
+    final d = DateTime.parse(iso).toLocal();
+    String k(int n) => n.toString().padLeft(2, '0');
+    return '${d.year}.${k(d.month)}.${k(d.day)}. ${k(d.hour)}:${k(d.minute)}';
+  }
 
   /// PDF gomb: letölti a PDF-et a szerverről, és megnyitja a nyomtatás / megosztás ablakban.
   Future<void> _pdfMegnyitas() async {
@@ -338,6 +445,11 @@ class _MunkalapReszletekScreenState extends State<MunkalapReszletekScreen> {
         foregroundColor: Colors.white,
         actions: [
           IconButton(
+            icon: const Icon(Icons.edit),
+            tooltip: 'Módosítás',
+            onPressed: _dolgozik ? null : _szerkesztes,
+          ),
+          IconButton(
             icon: const Icon(Icons.delete),
             tooltip: 'Törlés',
             onPressed: _dolgozik ? null : _torles,
@@ -352,6 +464,12 @@ class _MunkalapReszletekScreenState extends State<MunkalapReszletekScreen> {
             'E-mail: ${{'kuldve': 'elküldve', 'hiba': 'hiba – ${email['error'] ?? ''}', 'nincs': 'nem ment ki'}[email['status']] ?? email['status']}',
             style: const TextStyle(color: Colors.grey),
           ),
+          // Ha módosították: hányszor (a változatok lent láthatók)
+          if (((_w['modositasokSzama'] as num?) ?? 0) > 0)
+            Text(
+              '${_w['modositasokSzama']}× módosítva',
+              style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold),
+            ),
           const SizedBox(height: 12),
           Row(
             children: [
@@ -390,6 +508,166 @@ class _MunkalapReszletekScreenState extends State<MunkalapReszletekScreen> {
               ),
           if (files['alairasUgyfel'] == true) _alairas('alairasUgyfel', 'Ügyfél aláírása'),
           if (files['alairasSzerviz'] == true) _alairas('alairasSzerviz', 'Szerviz aláírása'),
+          // Korábbi változatok (csak ha a munkalapot már módosították)
+          if (_valtozatok != null) ...[
+            const SizedBox(height: 8),
+            const Text('Változatok', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            _valtozatokLista(),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MUNKALAP MÓDOSÍTÁSA
+// ---------------------------------------------------------------------------
+// A beküldött munkalap mezői szerkeszthetők. A DRI szám és az aláírások nem
+// változnak. Mentéskor a szerver:
+//   - megtartja a régi változatot és a régi PDF-et (a "Változatok" részben megnézhető),
+//   - új PDF-et készít, rajta pirossal: "Módosítás dátuma: 2026.10.12. 14:35",
+//   - a naplóba beírja, ki, mikor és mit módosított.
+// Ehhez net kell (a módosítás nem kerül várólistára).
+class MunkalapSzerkesztesScreen extends StatefulWidget {
+  /// A módosítandó munkalap (ahogy a szerver küldte).
+  final Map<String, dynamic> munkalap;
+  const MunkalapSzerkesztesScreen({super.key, required this.munkalap});
+
+  @override
+  State<MunkalapSzerkesztesScreen> createState() => _MunkalapSzerkesztesScreenState();
+}
+
+class _MunkalapSzerkesztesScreenState extends State<MunkalapSzerkesztesScreen> {
+  /// A módosítható mezők: [kulcs, felirat, többsoros-e]. Ugyanazok, mint a szerveren.
+  static const _mezok = [
+    ['ugyfel', 'Ügyfél', false],
+    ['ugyfelEmail', 'Ügyfél e-mail', false],
+    ['helyszin', 'Munkavégzés helye', false],
+    ['gep', 'Gép típusa', false],
+    ['idotartam', 'Munkavégzés időtartama', false],
+    ['km', 'Megtett km', false],
+    ['elvegzettMunka', 'Elvégzett munka', true],
+    ['hibaLeiras', 'Hiba leírása + javaslat', true],
+    ['datum', 'Hely, dátum', false],
+  ];
+
+  /// Mezőnként egy szövegmező-vezérlő, az eredeti értékkel kitöltve.
+  late final Map<String, TextEditingController> _vezerlok;
+  late final Map<String, String> _eredeti; // a módosítás előtti értékek (ehhez hasonlítunk)
+  bool _ment = false; // igaz, amíg a mentés fut
+
+  @override
+  void initState() {
+    super.initState();
+    final data = widget.munkalap['data'] as Map<String, dynamic>;
+    _eredeti = {for (final m in _mezok) m[0] as String: (data[m[0]] ?? '').toString()};
+    _vezerlok = {for (final e in _eredeti.entries) e.key: TextEditingController(text: e.value)};
+  }
+
+  @override
+  void dispose() {
+    for (final c in _vezerlok.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  /// Azok a mezők, amelyek eltérnek az eredetitől: {kulcs: új érték}.
+  Map<String, String> get _valtozott => {
+        for (final e in _vezerlok.entries)
+          if (e.value.text != _eredeti[e.key]) e.key: e.value.text,
+      };
+
+  /// Mentés gomb: rákérdez (felsorolja, mi változik), majd elküldi a szervernek.
+  /// Siker esetén visszalép, és visszaadja a frissített munkalapot a részletek képernyőnek.
+  Future<void> _mentes() async {
+    final valtozott = _valtozott;
+    if (valtozott.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nem változott semmi.')));
+      return;
+    }
+    final nevek = {for (final m in _mezok) m[0]: m[1]};
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Módosítás mentése'),
+        content: Text(
+          'Ezek a mezők változnak:\n${valtozott.keys.map((k) => '• ${nevek[k]}').join('\n')}\n\n'
+          'A DRI szám ugyanaz marad. Új PDF készül, rajta pirossal a módosítás ideje; '
+          'a régi változat megmarad.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Mégse')),
+          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Mentés')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _ment = true);
+    try {
+      final uj = await MunkalapApi.instance.modositas(widget.munkalap['id'] as String, valtozott);
+      if (!mounted) return;
+      Navigator.pop(context, uj);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _ment = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Nem sikerült menteni: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('DRI-${widget.munkalap['munkalapszam'] ?? ''} módosítása'),
+        backgroundColor: Colors.deepOrange,
+        foregroundColor: Colors.white,
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          // A DRI szám nem módosítható – csak megjelenítjük, lakat ikonnal
+          InputDecorator(
+            decoration: const InputDecoration(
+              labelText: 'Munkalap száma',
+              border: OutlineInputBorder(),
+              suffixIcon: Icon(Icons.lock_outline),
+            ),
+            child: Text('DRI-${widget.munkalap['munkalapszam'] ?? ''}'),
+          ),
+          const SizedBox(height: 12),
+          for (final m in _mezok)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: TextField(
+                controller: _vezerlok[m[0]],
+                enabled: !_ment,
+                minLines: m[2] == true ? 3 : 1,
+                maxLines: m[2] == true ? 8 : 1,
+                keyboardType: m[0] == 'ugyfelEmail'
+                    ? TextInputType.emailAddress
+                    : (m[2] == true ? TextInputType.multiline : TextInputType.text),
+                decoration: InputDecoration(labelText: m[1] as String, border: const OutlineInputBorder()),
+              ),
+            ),
+          const Text(
+            'Az aláírások nem módosíthatók.',
+            style: TextStyle(color: Colors.grey),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 48,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.deepOrange, foregroundColor: Colors.white),
+              onPressed: _ment ? null : _mentes,
+              icon: _ment
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.save),
+              label: const Text('MÓDOSÍTÁS MENTÉSE'),
+            ),
+          ),
         ],
       ),
     );

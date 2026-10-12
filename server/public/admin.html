@@ -1,0 +1,465 @@
+<!doctype html>
+<!--
+  DR INDUSTRIE – ADMIN FELÜLET
+  Címe: https://munkalap.drindustrie.hu/admin.html
+  A VPS-en itt van: /opt/munkalap/server/public/admin.html
+
+  Belépni csak az ADMIN_EMAILS-ben (/opt/munkalap/.env) megadott e-mail címekkel lehet, saját jelszóval.
+  Első belépéskor az admin maga állítja be a jelszavát (ehhez az alkalmazáskulcs is kell).
+
+  Részek (fülek):
+    Áttekintés          – darabszámok, napi munkalapszám, felhasználónkénti összesítés
+    Km és helyszínek    – összes km, km emberenként, helyszínek listája
+    Napló               – ki, mikor, mit csinált; módosításnál előtte / utána
+    Törölt munkalapok   – visszaállítás
+    Felhasználók        – utolsó aktivitás, eszközök
+    Jelszó              – jelszócsere
+-->
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DR Munkalap Admin</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1d2330; --muted:#677085; --line:#dde1e8; --accent:#d84315; --bar:#e0592a; --ok:#2e7d32; --danger:#c62828; --grid:#e8ebf0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171c; --card:#1d2128; --text:#e6e9ef; --muted:#9aa3b5; --line:#2e343e; --accent:#ff7043; --bar:#ff8a5c; --ok:#66bb6a; --danger:#ef5350; --grid:#2a2f38; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 16px; background:#263238; color:#fff; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; }
+  header a, header button.link { color:#fff; }
+  main { max-width:1200px; margin:0 auto; padding:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  h2 { font-size:17px; margin:0 0 12px; }
+  input, select, textarea, button { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); }
+  button, a.btn { background:var(--accent); color:#fff; border:1px solid var(--accent); cursor:pointer; text-decoration:none; display:inline-block; border-radius:8px; padding:8px 12px; }
+  button.secondary { background:none; color:var(--accent); }
+  button.link { background:none; border:none; padding:0; color:var(--accent); text-decoration:underline; }
+  .hidden { display:none !important; }
+  .muted { color:var(--muted); font-size:13px; }
+  .err { color:var(--danger); }
+  .ok { color:var(--ok); }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  #loginCard { max-width:400px; margin:48px auto; }
+  #loginCard label, #jelszoForm label { display:block; margin:12px 0 4px; }
+  #loginCard input, #jelszoForm input { width:100%; }
+  #loginCard button { margin-top:16px; width:100%; }
+  nav.tabs { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:16px; }
+  nav.tabs button { background:var(--card); color:var(--text); border-color:var(--line); }
+  nav.tabs button.aktiv { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:12px; margin-bottom:16px; }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .tile .num { font-size:28px; font-weight:700; line-height:1.1; }
+  .tile .lbl { color:var(--muted); font-size:13px; }
+  .table-wrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:13px; }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  /* Egysorozatos sávdiagramok (egy szín, jelmagyarázat nem kell; a pontos érték rámutatáskor és a táblázatban) */
+  .hbar { display:grid; grid-template-columns:minmax(120px, 220px) 1fr 70px; gap:6px 10px; align-items:center; }
+  .hbar .track { height:14px; border-left:1px solid var(--muted); }
+  .hbar .fill { height:14px; background:var(--bar); border-radius:0 4px 4px 0; min-width:2px; }
+  .hbar .val { text-align:right; font-variant-numeric:tabular-nums; font-size:13px; }
+  .vbars { display:flex; align-items:flex-end; justify-content:center; gap:2px; height:160px; border-bottom:1px solid var(--muted); padding-top:8px; }
+  .vbars .b { flex:1; min-width:3px; max-width:48px; background:var(--bar); border-radius:4px 4px 0 0; position:relative; }
+  .vbars .b:hover, .hbar .fill:hover { filter:brightness(1.15); }
+  .vlabels { display:flex; justify-content:space-between; color:var(--muted); font-size:12px; margin-top:4px; }
+  .valtozas { font-size:13px; margin:4px 0 0; padding-left:18px; }
+  .valtozas del { color:var(--muted); }
+  .valtozas ins { text-decoration:none; color:var(--danger); font-weight:600; }
+  .tipus { font-size:12px; padding:2px 8px; border-radius:10px; border:1px solid var(--line); white-space:nowrap; }
+  .tipus.modositas { border-color:var(--danger); color:var(--danger); }
+  .tipus.torles { background:var(--danger); color:#fff; border-color:var(--danger); }
+  .tipus.letrehozas { border-color:var(--ok); color:var(--ok); }
+  #tooltip { position:fixed; pointer-events:none; background:var(--text); color:var(--bg); padding:4px 8px; border-radius:6px; font-size:12px; z-index:10; }
+  @media (max-width: 640px) { .hbar { grid-template-columns:1fr 60px; } .hbar .name { grid-column:1 / -1; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>DR Industrie – Admin</h1>
+  <div><a href="/">Munkalapok</a><span id="adminWho" class="hidden"> · <span id="adminEmail"></span> · <button class="link" id="kilepes">Kilépés</button></span></div>
+</header>
+<div id="tooltip" class="hidden"></div>
+
+<main>
+  <!-- BELÉPÉS -->
+  <form id="loginCard" class="card hidden">
+    <h2>Admin belépés</h2>
+    <label for="lEmail">E-mail cím</label>
+    <input id="lEmail" type="email" autocomplete="username" required>
+    <div id="jelszoSor">
+      <label for="lJelszo">Jelszó</label>
+      <input id="lJelszo" type="password" autocomplete="current-password">
+    </div>
+    <!-- Első belépéskor: jelszó beállítása -->
+    <div id="elsoJelszo" class="hidden">
+      <p class="muted">Ehhez az admin fiókhoz még nincs jelszó. Add meg a saját jelszavadat (legalább 8 karakter) és az alkalmazáskulcsot.</p>
+      <label for="eJelszo1">Új jelszó</label>
+      <input id="eJelszo1" type="password" autocomplete="new-password">
+      <label for="eJelszo2">Új jelszó még egyszer</label>
+      <input id="eJelszo2" type="password" autocomplete="new-password">
+      <label for="eKulcs">Alkalmazáskulcs</label>
+      <input id="eKulcs" type="password">
+    </div>
+    <button type="submit" id="loginBtn">Belépés</button>
+    <p id="loginErr" class="err"></p>
+  </form>
+
+  <!-- ADMIN FELÜLET -->
+  <section id="adminView" class="hidden">
+    <nav class="tabs" id="tabs">
+      <button data-tab="attekintes" class="aktiv">Áttekintés</button>
+      <button data-tab="km">Km és helyszínek</button>
+      <button data-tab="naplo">Napló</button>
+      <button data-tab="torolt">Törölt munkalapok</button>
+      <button data-tab="felhasznalok">Felhasználók</button>
+      <button data-tab="jelszo">Jelszó</button>
+    </nav>
+
+    <!-- Időszak (az Áttekintés, Km és Napló fülekre vonatkozik) -->
+    <div class="card row" id="idoszakSav">
+      <label class="muted">Ettől <input type="date" id="from"></label>
+      <label class="muted">Eddig <input type="date" id="to"></label>
+      <button class="secondary" data-preset="honap">Ez a hónap</button>
+      <button class="secondary" data-preset="elozo">Előző hónap</button>
+      <button class="secondary" data-preset="ev">Idén</button>
+      <button class="secondary" data-preset="mind">Összes</button>
+      <a class="btn" id="csvLink" href="#" style="margin-left:auto">Excel export (CSV)</a>
+    </div>
+
+    <!-- Áttekintés -->
+    <div id="tab-attekintes">
+      <div class="tiles" id="atTiles"></div>
+      <div class="card">
+        <h2>Munkalapok naponta</h2>
+        <div id="napiChart"></div>
+      </div>
+      <div class="card">
+        <h2>Felhasználónként</h2>
+        <div class="table-wrap"><table><thead><tr><th>Felhasználó</th><th class="num">Munkalap</th><th>Utolsó munkalap</th></tr></thead><tbody id="atEmberek"></tbody></table></div>
+      </div>
+    </div>
+
+    <!-- Km és helyszínek -->
+    <div id="tab-km" class="hidden">
+      <div class="tiles" id="kmTiles"></div>
+      <div class="card">
+        <h2>Megtett km emberenként</h2>
+        <div id="kmChart"></div>
+        <div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Felhasználó</th><th class="num">Munkalap</th><th class="num">Km</th></tr></thead><tbody id="kmEmberek"></tbody></table></div>
+      </div>
+      <div class="card">
+        <h2>Helyszínek</h2>
+        <div class="table-wrap"><table><thead><tr><th>Helyszín</th><th class="num">Munkalap</th><th class="num">Km</th><th>Kik jártak ott</th><th>Utoljára</th></tr></thead><tbody id="helyszinek"></tbody></table></div>
+      </div>
+      <div class="card hidden" id="kmHibaCard">
+        <h2>Nem értelmezhető km értékek</h2>
+        <p class="muted">Ezeknél a "Megtett km" mezőben nincs szám, ezért 0-nak számítanak az összesítésben.</p>
+        <ul id="kmHibak"></ul>
+      </div>
+    </div>
+
+    <!-- Napló -->
+    <div id="tab-naplo" class="hidden">
+      <div class="card row">
+        <select id="nTipus">
+          <option value="">Minden esemény</option>
+          <option value="modositas">Módosítás</option>
+          <option value="letrehozas">Új munkalap</option>
+          <option value="torles">Törlés</option>
+          <option value="visszaallitas">Visszaállítás</option>
+          <option value="email">E-mail küldés</option>
+          <option value="admin_belepes">Admin belépés</option>
+          <option value="admin_hibas_jelszo">Hibás admin jelszó</option>
+          <option value="admin_jelszo">Admin jelszó</option>
+        </select>
+        <input id="nKereses" placeholder="Keresés: DRI szám, e-mail, ügyfél">
+        <button id="nKeresBtn">Szűrés</button>
+        <span class="muted" id="nDb"></span>
+      </div>
+      <div class="card">
+        <div class="table-wrap"><table><thead><tr><th>Időpont</th><th>Esemény</th><th>Ki</th><th>Munkalap</th><th>Részletek</th></tr></thead><tbody id="naploSorok"></tbody></table></div>
+        <p><button id="nTovabb" class="secondary hidden">Továbbiak</button></p>
+      </div>
+    </div>
+
+    <!-- Törölt munkalapok -->
+    <div id="tab-torolt" class="hidden">
+      <div class="card">
+        <h2>Törölt munkalapok</h2>
+        <p class="muted">A törölt munkalapok nem vesznek el, innen visszaállíthatók.</p>
+        <div class="table-wrap"><table><thead><tr><th>DRI szám</th><th>Ügyfél</th><th>Rögzítette</th><th>Törölve</th><th></th></tr></thead><tbody id="toroltSorok"></tbody></table></div>
+      </div>
+    </div>
+
+    <!-- Felhasználók -->
+    <div id="tab-felhasznalok" class="hidden">
+      <div class="card">
+        <h2>Felhasználók</h2>
+        <div class="table-wrap"><table><thead><tr><th>E-mail</th><th class="num">Munkalap</th><th>Utolsó aktivitás</th><th>Első belépés</th><th>Eszközök</th></tr></thead><tbody id="felhSorok"></tbody></table></div>
+      </div>
+    </div>
+
+    <!-- Jelszócsere -->
+    <div id="tab-jelszo" class="hidden">
+      <form class="card" id="jelszoForm" style="max-width:420px">
+        <h2>Jelszó megváltoztatása</h2>
+        <label for="jRegi">Jelenlegi jelszó</label>
+        <input id="jRegi" type="password" autocomplete="current-password" required>
+        <label for="jUj1">Új jelszó (legalább 8 karakter)</label>
+        <input id="jUj1" type="password" autocomplete="new-password" required>
+        <label for="jUj2">Új jelszó még egyszer</label>
+        <input id="jUj2" type="password" autocomplete="new-password" required>
+        <p><button type="submit">Jelszó mentése</button></p>
+        <p id="jelszoInfo"></p>
+      </form>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} },
+};
+let token = store.get('munkalap_admin_token'); // admin belépés (12 óráig érvényes)
+let aktivFul = 'attekintes';
+let naploOffset = 0;
+
+const MEZO_NEV = { driSzam: 'Munkalap száma', ugyfel: 'Ügyfél', ugyfelEmail: 'Ügyfél e-mail', helyszin: 'Munkavégzés helye', gep: 'Gép típusa',
+  idotartam: 'Időtartam', km: 'Megtett km', elvegzettMunka: 'Elvégzett munka', hibaLeiras: 'Hiba leírása + javaslat', datum: 'Hely, dátum' };
+const TIPUS_NEV = { modositas: 'Módosítás', letrehozas: 'Új munkalap', torles: 'Törlés', visszaallitas: 'Visszaállítás', email: 'E-mail küldés',
+  admin_belepes: 'Admin belépés', admin_hibas_jelszo: 'Hibás admin jelszó', admin_jelszo: 'Admin jelszó' };
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+const fmtDate = (iso) => iso ? new Date(iso).toLocaleString('hu-HU', { dateStyle: 'short', timeStyle: 'short' }) : '';
+const fmtNum = (n) => Number(n).toLocaleString('hu-HU', { maximumFractionDigits: 1 });
+const isoNap = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+// Kérés az admin végpontok felé. 401 esetén vissza a belépéshez.
+async function api(path, opts = {}) {
+  const res = await fetch('/api/admin' + path, {
+    ...opts,
+    headers: { 'content-type': 'application/json', ...(token ? { authorization: 'Bearer ' + token } : {}) },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401 && !['/belepes', '/elso-jelszo'].includes(path)) { kijelentkeztet(); throw new Error(body.error || 'Lejárt a belépés.'); }
+  if (!res.ok) { const e = new Error(body.error || 'Hiba'); e.status = res.status; e.body = body; throw e; }
+  return body;
+}
+
+// Az időszak szűrő paraméterei (from / to) az URL-ekhez.
+const idoszakParam = () => {
+  const p = new URLSearchParams();
+  if ($('from').value) p.set('from', $('from').value);
+  if ($('to').value) p.set('to', $('to').value);
+  return p;
+};
+
+// --- Belépés ---
+// A belépő űrlap visszaállítása a sima (e-mail + jelszó) módba.
+function urlapAlaphelyzet() {
+  $('elsoJelszo').classList.add('hidden'); $('jelszoSor').classList.remove('hidden');
+  $('loginBtn').textContent = 'Belépés';
+  ['lJelszo', 'eJelszo1', 'eJelszo2', 'eKulcs'].forEach((id) => { $(id).value = ''; });
+}
+// Ha másik e-mail címet írnak be, újra a sima belépés jön.
+$('lEmail').addEventListener('input', () => { if (!$('elsoJelszo').classList.contains('hidden')) urlapAlaphelyzet(); });
+
+function kijelentkeztet() {
+  token = null; store.set('munkalap_admin_token', null);
+  urlapAlaphelyzet();
+  $('adminView').classList.add('hidden'); $('adminWho').classList.add('hidden'); $('loginCard').classList.remove('hidden');
+}
+async function belepve() {
+  const me = await api('/me');
+  $('adminEmail').textContent = me.email;
+  $('loginCard').classList.add('hidden'); $('adminWho').classList.remove('hidden'); $('adminView').classList.remove('hidden');
+  fulValtas(aktivFul);
+}
+$('loginCard').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('loginErr').textContent = '';
+  const email = $('lEmail').value.trim();
+  try {
+    let r;
+    if (!$('elsoJelszo').classList.contains('hidden')) {
+      if ($('eJelszo1').value !== $('eJelszo2').value) throw new Error('A két jelszó nem egyezik.');
+      r = await api('/elso-jelszo', { method: 'POST', body: JSON.stringify({ email, jelszo: $('eJelszo1').value, appKey: $('eKulcs').value }) });
+    } else {
+      r = await api('/belepes', { method: 'POST', body: JSON.stringify({ email, jelszo: $('lJelszo').value }) });
+    }
+    token = r.token; store.set('munkalap_admin_token', token);
+    await belepve();
+  } catch (err) {
+    if (err.body && err.body.jelszoBeallitasKell) {
+      // Első belépés: jelszó beállítása
+      $('elsoJelszo').classList.remove('hidden'); $('jelszoSor').classList.add('hidden');
+      $('loginBtn').textContent = 'Jelszó beállítása és belépés';
+      return;
+    }
+    $('loginErr').textContent = err.message;
+  }
+});
+$('kilepes').addEventListener('click', async () => { await api('/kilepes', { method: 'POST' }).catch(() => {}); kijelentkeztet(); });
+
+// --- Fülek ---
+function fulValtas(ful) {
+  aktivFul = ful;
+  document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('aktiv', b.dataset.tab === ful));
+  document.querySelectorAll('[id^="tab-"]').forEach((el) => el.classList.toggle('hidden', el.id !== 'tab-' + ful));
+  $('idoszakSav').classList.toggle('hidden', !['attekintes', 'km', 'naplo'].includes(ful));
+  frissit();
+}
+$('tabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) fulValtas(b.dataset.tab); });
+
+function frissit() {
+  $('csvLink').href = `/api/admin/export.csv?${idoszakParam()}&token=${encodeURIComponent(token)}`;
+  const f = { attekintes, km, naplo: () => naplo(true), torolt, felhasznalok }[aktivFul];
+  if (f) f().catch((err) => alert(err.message));
+}
+
+// --- Időszak ---
+function preset(nev) {
+  const ma = new Date();
+  let tol = null; let ig = null;
+  if (nev === 'honap') { tol = new Date(ma.getFullYear(), ma.getMonth(), 1); ig = ma; }
+  if (nev === 'elozo') { tol = new Date(ma.getFullYear(), ma.getMonth() - 1, 1); ig = new Date(ma.getFullYear(), ma.getMonth(), 0); }
+  if (nev === 'ev') { tol = new Date(ma.getFullYear(), 0, 1); ig = ma; }
+  $('from').value = tol ? isoNap(tol) : '';
+  $('to').value = ig ? isoNap(ig) : '';
+}
+$('idoszakSav').addEventListener('click', (e) => { const b = e.target.closest('button[data-preset]'); if (b) { preset(b.dataset.preset); frissit(); } });
+$('from').addEventListener('change', frissit);
+$('to').addEventListener('change', frissit);
+
+// --- Rámutatásra megjelenő pontos érték (tooltip) a diagramoknál ---
+document.addEventListener('mousemove', (e) => {
+  const el = e.target.closest('[data-tip]');
+  const tip = $('tooltip');
+  if (!el) { tip.classList.add('hidden'); return; }
+  tip.textContent = el.dataset.tip;
+  tip.style.left = (e.clientX + 12) + 'px';
+  tip.style.top = (e.clientY + 12) + 'px';
+  tip.classList.remove('hidden');
+});
+
+const tile = (num, lbl) => `<div class="tile"><div class="num">${num}</div><div class="lbl">${lbl}</div></div>`;
+
+// Vízszintes sávdiagram (egy sorozat): [{nev, ertek, tip}]
+function hbar(lista, mertekegyseg) {
+  const max = Math.max(1, ...lista.map((x) => x.ertek));
+  return `<div class="hbar">${lista.map((x) => `
+    <div class="name">${esc(x.nev)}</div>
+    <div class="track"><div class="fill" style="width:${(x.ertek / max) * 100}%" data-tip="${esc(x.nev)}: ${fmtNum(x.ertek)} ${mertekegyseg}"></div></div>
+    <div class="val">${fmtNum(x.ertek)}</div>`).join('')}</div>`;
+}
+
+// --- Áttekintés ---
+async function attekintes() {
+  const r = await api('/attekintes?' + idoszakParam());
+  $('atTiles').innerHTML = tile(r.munkalapok, 'Munkalap') + tile(r.modositasok, 'Módosítás') + tile(r.torlesek, 'Törlés')
+    + tile(r.emailek, 'Kiküldött e-mail') + tile(r.aktivFelhasznalok, 'Aktív felhasználó');
+  // Napi munkalapszám: függőleges sávok, a hiányzó napok 0-val (hogy az idő arányos legyen)
+  if (!r.napiBontas.length) {
+    $('napiChart').innerHTML = '<p class="muted">Ebben az időszakban nincs munkalap.</p>';
+  } else {
+    const napok = [];
+    const elso = new Date(r.napiBontas[0].nap); const utolso = new Date(r.napiBontas[r.napiBontas.length - 1].nap);
+    const db = Object.fromEntries(r.napiBontas.map((x) => [x.nap, x.db]));
+    for (let d = new Date(elso); d <= utolso && napok.length < 400; d.setDate(d.getDate() + 1)) napok.push(isoNap(d));
+    const max = Math.max(...napok.map((n) => db[n] || 0));
+    $('napiChart').innerHTML = `<div class="vbars">${napok.map((n) => {
+      const v = db[n] || 0;
+      return `<div class="b" style="height:${(v / max) * 100}%" data-tip="${n}: ${v} munkalap"></div>`;
+    }).join('')}</div><div class="vlabels"><span>${napok[0]}</span><span>legtöbb egy nap alatt: ${max}</span><span>${napok[napok.length - 1]}</span></div>`;
+  }
+  $('atEmberek').innerHTML = r.emberek.map((e) => `<tr><td>${esc(e.email)}</td><td class="num">${e.munkalap}</td><td>${fmtDate(e.utolso)}</td></tr>`).join('')
+    || '<tr><td colspan="3" class="muted">Nincs adat.</td></tr>';
+}
+
+// --- Km és helyszínek ---
+async function km() {
+  const r = await api('/statisztika?' + idoszakParam());
+  $('kmTiles').innerHTML = tile(fmtNum(r.osszKm) + ' km', 'Összes megtett távolság') + tile(r.munkalapok, 'Munkalap')
+    + tile(r.helyszinek.length, 'Különböző helyszín') + tile(r.munkalapok ? fmtNum(r.osszKm / r.munkalapok) + ' km' : '–', 'Átlag / munkalap');
+  $('kmChart').innerHTML = r.emberek.length ? hbar(r.emberek.map((e) => ({ nev: e.email, ertek: e.km })), 'km') : '<p class="muted">Nincs adat.</p>';
+  $('kmEmberek').innerHTML = r.emberek.map((e) => `<tr><td>${esc(e.email)}</td><td class="num">${e.munkalap}</td><td class="num">${fmtNum(e.km)}</td></tr>`).join('')
+    + (r.emberek.length ? `<tr><th>Összesen</th><th class="num">${r.munkalapok}</th><th class="num">${fmtNum(r.osszKm)}</th></tr>` : '');
+  $('helyszinek').innerHTML = r.helyszinek.map((h) => `<tr><td>${esc(h.helyszin)}</td><td class="num">${h.munkalap}</td><td class="num">${fmtNum(h.km)}</td>
+    <td>${h.kik.map(esc).join(', ')}</td><td>${fmtDate(h.utolso)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nincs adat.</td></tr>';
+  $('kmHibaCard').classList.toggle('hidden', !r.ertelmezhetetlenKm.length);
+  $('kmHibak').innerHTML = r.ertelmezhetetlenKm.map((x) => `<li>DRI-${esc(x.driSzam)} – "${esc(x.km)}" (${esc(x.ki)})</li>`).join('');
+}
+
+// --- Napló ---
+const pdfLink = (id, n, szoveg) => `<a href="/api/admin/munkalap/${encodeURIComponent(id)}/valtozatok/${n}/pdf?token=${encodeURIComponent(token)}" target="_blank" rel="noopener">${szoveg}</a>`;
+async function naplo(uj) {
+  if (uj) { naploOffset = 0; $('naploSorok').innerHTML = ''; }
+  const p = idoszakParam();
+  if ($('nTipus').value) p.set('tipus', $('nTipus').value);
+  if ($('nKereses').value.trim()) p.set('q', $('nKereses').value.trim());
+  p.set('limit', 100); p.set('offset', naploOffset);
+  const r = await api('/naplo?' + p);
+  $('naploSorok').insertAdjacentHTML('beforeend', r.items.map((n) => {
+    let reszlet = esc(n.megjegyzes || '');
+    if (n.tipus === 'modositas') {
+      reszlet = `<div>${n.elottePdf ? pdfLink(n.worksheetId, n.valtozat - 1, 'PDF előtte') + ' · ' : ''}${pdfLink(n.worksheetId, n.valtozat, 'PDF utána')}</div>
+        <ul class="valtozas">${n.valtozasok.map((c) => `<li>${esc(MEZO_NEV[c.mezo] || c.mezo)}: <del>${esc(c.elotte) || '(üres)'}</del> → <ins>${esc(c.utana) || '(üres)'}</ins></li>`).join('')}</ul>`;
+    }
+    return `<tr><td style="white-space:nowrap">${fmtDate(n.ts)}</td><td><span class="tipus ${n.tipus}">${esc(TIPUS_NEV[n.tipus] || n.tipus)}</span></td>
+      <td>${esc(n.ki || '')}</td><td>${n.driSzam ? 'DRI-' + esc(n.driSzam) : ''}${n.ugyfel ? '<br><span class="muted">' + esc(n.ugyfel) + '</span>' : ''}</td><td>${reszlet}</td></tr>`;
+  }).join(''));
+  naploOffset += r.items.length;
+  $('nDb').textContent = `${r.total} esemény`;
+  $('nTovabb').classList.toggle('hidden', naploOffset >= r.total);
+  if (!r.total) $('naploSorok').innerHTML = '<tr><td colspan="5" class="muted">Nincs esemény ebben az időszakban.</td></tr>';
+}
+$('nKeresBtn').addEventListener('click', () => naplo(true));
+$('nTipus').addEventListener('change', () => naplo(true));
+$('nTovabb').addEventListener('click', () => naplo(false));
+
+// --- Törölt munkalapok ---
+async function torolt() {
+  const lista = await api('/torolt');
+  $('toroltSorok').innerHTML = lista.map((w) => `<tr><td>${w.munkalapszam ? 'DRI-' + esc(w.munkalapszam) : ''}</td><td>${esc(w.ugyfel)}</td>
+    <td>${esc(w.createdBy.email)}</td><td>${fmtDate(w.updatedAt)} <span class="muted">(${esc(w.updatedBy.email)})</span></td>
+    <td><button class="secondary" data-vissza="${esc(w.id)}">Visszaállítás</button></td></tr>`).join('')
+    || '<tr><td colspan="5" class="muted">Nincs törölt munkalap.</td></tr>';
+}
+$('toroltSorok').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-vissza]');
+  if (!b || !confirm('Visszaállítod ezt a munkalapot?')) return;
+  try { await api('/visszaallitas/' + encodeURIComponent(b.dataset.vissza), { method: 'POST' }); torolt(); } catch (err) { alert(err.message); }
+});
+
+// --- Felhasználók ---
+async function felhasznalok() {
+  const lista = await api('/felhasznalok');
+  $('felhSorok').innerHTML = lista.map((u) => `<tr><td>${esc(u.email)}${u.admin ? ' <span class="tipus">admin</span>' : ''}</td><td class="num">${u.munkalap}</td>
+    <td>${fmtDate(u.utolsoAktivitas)}</td><td>${fmtDate(u.elsoBelepes)}</td><td class="muted">${esc(u.eszkozok)}</td></tr>`).join('');
+}
+
+// --- Jelszócsere ---
+$('jelszoForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const info = $('jelszoInfo');
+  if ($('jUj1').value !== $('jUj2').value) { info.className = 'err'; info.textContent = 'A két új jelszó nem egyezik.'; return; }
+  try {
+    await api('/jelszo', { method: 'POST', body: JSON.stringify({ regi: $('jRegi').value, uj: $('jUj1').value }) });
+    info.className = 'ok'; info.textContent = 'A jelszó megváltozott.';
+    e.target.reset();
+  } catch (err) { info.className = 'err'; info.textContent = err.message; }
+});
+
+// Indulás: alapból az aktuális hónap
+preset('honap');
+token ? belepve().catch(() => kijelentkeztet()) : kijelentkeztet();
+</script>
+</body>
+</html>
