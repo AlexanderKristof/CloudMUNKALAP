@@ -30,6 +30,8 @@ küld be munkalapot, a szerver egy helyen tárolja őket, és kereshetővé tesz
   `Módosítás dátuma: 2026.10.12. 14:35`.
 - A **régi változat és a régi PDF megmarad**. A listában a módosított munkalapoknál „N× módosítva” jelzés és
   egy „Változatok ▾” lenyíló látható. Ebben minden változat megnyitható, és látszik, mi változott (régi → új).
+- Ha a sablont kicserélik, vagy a PDF elrendezése javul, a módosított munkalapok aktuális PDF-je újrakészíthető
+  (az eredeti és a régi változatok PDF-jéhez nem nyúl): `cd /opt/munkalap/server && node src/pdf-ujra.js`
 - A szerver a PDF-hez a `server/assets/sablon.png` hátteret használja (ugyanaz a kép, mint az appban az
   `assets/sablon.png`), és a `server/fonts/` mappa Roboto betűtípusát.
 
@@ -78,6 +80,8 @@ server/                     Node.js + Express + SQLite szerver
   src/db.js                 adatbázis-séma
   src/pdf.js                a módosított munkalapok PDF-je
   src/admin-jelszo.js       admin jelszó beállítása konzolból
+  src/pdf-ujra.js           módosított PDF-ek újrakészítése konzolból
+  src/konzol.js             a konzolos parancsok beállításai (.env beolvasása)
   assets/sablon.png         a PDF háttere (ide kell feltölteni, lásd lent)
   fonts/                    Roboto betűtípus a PDF-hez
   public/index.html         böngészős kereső felület

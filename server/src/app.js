@@ -409,6 +409,13 @@ function createApp(db, options = {}) {
     await modositottPdf(id);
   }
 
+  function utolsoModositas(id) {
+    const mods = stmt.modositasokByWs.all(id);
+    return mods.length ? mods[mods.length - 1].ts : null;
+  }
+
+  // A módosított munkalap PDF-jének elkészítése (munkalap.pdf), pirossal a módosítás idejével.
+  // Akkor is hívható, ha a PDF már megvan: felülírja (pl. a pdf-ujra.js parancs).
   async function modositottPdf(id) {
     const row = stmt.wsById.get(id);
     const dir = path.join(filesDir, id);
@@ -417,7 +424,7 @@ function createApp(db, options = {}) {
       const pdf = await munkalapPdf(JSON.parse(row.data), {
         alairasUgyfel: row.has_alairas_ugyfel ? olvas(FILES.alairasUgyfel.file) : null,
         alairasSzerviz: row.has_alairas_szerviz ? olvas(FILES.alairasSzerviz.file) : null,
-        modositva: row.updated_at,
+        modositva: utolsoModositas(id) ?? row.updated_at, // az utolsó módosítás ideje (nem a legutóbbi mentésé)
         sablonFile,
       });
       writeFiles(id, { pdf });
@@ -1080,6 +1087,15 @@ function createApp(db, options = {}) {
 
     return r;
   }
+
+  // A konzolos parancsnak (pdf-ujra.js): a módosított munkalapok PDF-jének újragenerálása.
+  app.locals.pdfUjra = async () => {
+    const idk = db.prepare(`SELECT DISTINCT n.worksheet_id AS id FROM naplo n JOIN worksheets w ON w.id = n.worksheet_id
+      WHERE n.tipus = 'modositas' AND w.deleted = 0`).all().map((r) => r.id);
+    let sikeres = 0;
+    for (const id of idk) if (await modositottPdf(id)) sikeres++;
+    return { osszes: idk.length, sikeres, hibak: idk.filter((id) => pdfHibak.has(id)).map((id) => [id, pdfHibak.get(id)]) };
+  };
 
   app.use('/api/admin', adminRouter());
   app.use('/api', api);

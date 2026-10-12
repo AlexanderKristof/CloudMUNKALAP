@@ -15,21 +15,10 @@
 // =============================================================================
 
 const fs = require('fs');
-const path = require('path');
 const { openDb } = require('./db');
 const { jelszoMentes, veletlenJelszo } = require('./adminjelszo');
 
-// A beállításfájl (/opt/munkalap/.env) beolvasása, ha a környezetben nincs megadva az érték.
-// (A szolgáltatás a systemd-től kapja ezeket, a konzolból indított parancs viszont nem.)
-const ENV_FILE = process.env.ENV_FILE || path.join(__dirname, '..', '..', '.env');
-const envFajl = {};
-if (fs.existsSync(ENV_FILE)) {
-  for (const sor of fs.readFileSync(ENV_FILE, 'utf8').split(/\r?\n/)) {
-    const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(sor);
-    if (m) envFajl[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2');
-  }
-}
-const beallitas = (kulcs) => process.env[kulcs] || envFajl[kulcs];
+const { ENV_FILE, beallitas, dbFile } = require('./konzol');
 
 const email = String(process.argv[2] || '').trim().toLowerCase();
 if (!email || !email.includes('@')) {
@@ -45,10 +34,7 @@ if (!adminok.includes(email)) {
   process.exit(1);
 }
 
-// Ugyanaz az adatbázis, amit a szerver használ (a szolgáltatásban DATA_DIR=/opt/munkalap/data).
-const dataDir = beallitas('DATA_DIR')
-  || (fs.existsSync('/opt/munkalap/data') ? '/opt/munkalap/data' : path.join(process.cwd(), 'data'));
-const dbFile = beallitas('DB_FILE') || path.join(dataDir, 'munkalap.db');
+// Ugyanaz az adatbázis, amit a szerver használ (lásd konzol.js).
 if (!fs.existsSync(dbFile)) {
   console.log(`Nem található az adatbázis: ${dbFile}`);
   process.exit(1);

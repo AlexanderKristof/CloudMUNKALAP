@@ -298,3 +298,31 @@ test('hiányzó sablon: a módosított PDF később magától pótlódik, JPG sa
     fs.rmSync(d, { recursive: true, force: true });
   }
 });
+
+test('konzolos parancs: módosított PDF-ek újrakészítése', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'munkalap-ujra-'));
+  try {
+    const dbFile = path.join(d, 'munkalap.db');
+    const filesDir = path.join(d, 'files');
+    fs.writeFileSync(path.join(d, 'sablon.png'), png(60, 85));
+    const db2 = openDb(dbFile);
+    const app = createApp(db2, { appKey: 'k', filesDir, sablonFile: path.join(d, 'sablon.png') });
+    const srv = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    const b = `http://127.0.0.1:${srv.address().port}/api`;
+    const kerd = (method, p, token, body) => fetch(b + p, { method, headers: { 'content-type': 'application/json', 'x-app-key': 'k', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) }).then((r) => r.json());
+    const t = (await kerd('POST', '/login', null, { email: 'x@dri.hu', deviceId: 'd' })).token;
+    await kerd('PUT', '/worksheets/u-1', t, { data: { ugyfel: 'A' } });
+    await kerd('PUT', '/worksheets/u-2', t, { data: { ugyfel: 'B' } });
+    await kerd('PUT', '/worksheets/u-1/modositas', t, { data: { ugyfel: 'A2' } });
+    srv.close(); db2.close();
+    const pdfFajl = path.join(filesDir, 'u-1', 'munkalap.pdf');
+    fs.writeFileSync(pdfFajl, '%PDF regi');
+    const ki = execFileSync(process.execPath, [path.join(__dirname, '..', 'src', 'pdf-ujra.js')], {
+      env: { ...process.env, ENV_FILE: path.join(d, 'nincs.env'), DB_FILE: dbFile, FILES_DIR: filesDir, SABLON_FILE: path.join(d, 'sablon.png') }, encoding: 'utf8' });
+    assert.match(ki, /Módosított munkalapok: 1, új PDF elkészült: 1/);
+    assert.ok(fs.statSync(pdfFajl).size > 1000, 'a régi PDF helyett új készült');
+    assert.ok(!fs.existsSync(path.join(filesDir, 'u-2', 'munkalap.pdf')), 'a nem módosítotthoz nem nyúl');
+  } finally {
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+});

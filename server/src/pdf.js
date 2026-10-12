@@ -22,7 +22,7 @@ const fontkit = require('@pdf-lib/fontkit');
 
 const LAP_SZ = 595; // A4 szélesség
 const LAP_M = 842; // A4 magasság
-const ASCENT = 1.35; // a szöveg dobozának tetejétől az alapvonalig, a betűméret arányában (az app PDF-jéhez mérve)
+const ASCENT = 1900 / 2048; // a szöveg dobozának tetejétől az alapvonalig, a betűméret arányában (Roboto: ascent 1900 / 2048 – ugyanígy számol az app pdf csomagja)
 const SORMAGASSAG = 1.172; // Roboto sormagasság a betűméret arányában (ugyanaz, mint az appban)
 
 const FONT_DIR = path.join(__dirname, '..', 'fonts');
@@ -119,12 +119,12 @@ async function munkalapPdf(adatok, { alairasUgyfel = null, alairasSzerviz = null
     lap.drawText(String(ertek).replace(/\s*\r?\n\s*/g, ' '), { x: left, y: alapvonal(top, 10), size: 10, font, color: fekete });
   }
 
-  // Többsoros mezők: tördelve a keretbe; ami nem fér el, az lemarad (mint az appban).
+  // Többsoros mezők: tördelve a keretbe; ami nem fér el, az lemarad (mint az appban, ott is 9 sor fér el).
   for (const [kulcs, left, top, szel, mag] of TOBBSOROS) {
     const ertek = adatok[kulcs];
     if (!ertek) continue;
     const sorok = tordeles(ertek, font, 10, szel);
-    const maxSor = Math.floor(mag / (SORMAGASSAG * 10));
+    const maxSor = Math.ceil(mag / (SORMAGASSAG * 10)); // mint az appban: az a sor is kiírásra kerül, ami a keret aljánál kezdődik
     sorok.slice(0, maxSor).forEach((sor, i) => {
       lap.drawText(sor, { x: left, y: alapvonal(top + i * SORMAGASSAG * 10, 10), size: 10, font, color: fekete });
     });
@@ -143,7 +143,7 @@ async function munkalapPdf(adatok, { alairasUgyfel = null, alairasSzerviz = null
   // Módosítás jelzése pirossal, a "Hely, dátum" sor mellett jobbra.
   if (modositva) {
     lap.drawText(`Módosítás dátuma: ${datumIdo(modositva)}`, {
-      x: 320, y: alapvonal(611, 10), size: 10, font: fontBold, color: rgb(0.85, 0.1, 0.1),
+      x: 320, y: alapvonal(610, 10), size: 10, font: fontBold, color: rgb(0.85, 0.1, 0.1),
     });
   }
 
